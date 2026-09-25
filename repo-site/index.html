@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__REPO_NAME__ — Arch Linux package repository</title>
+<meta name="description" content="Signed pacman repository for BongoCat, built automatically from upstream releases.">
+<style>
+  :root {
+    --bg: #14121a;
+    --panel: #1d1a26;
+    --line: #2f2a3d;
+    --text: #ece9f3;
+    --muted: #a79fb8;
+    --accent: #f77daa;
+    --accent-soft: #ffb3cd;
+    --code: #0f0d15;
+    --mono: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 3rem 1.25rem 4rem;
+    background: radial-gradient(1200px 600px at 50% -10%, #2a2135 0%, var(--bg) 60%);
+    color: var(--text);
+    font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans CJK SC", sans-serif;
+  }
+  main { max-width: 780px; margin: 0 auto; }
+  h1 { font-size: 2rem; margin: 0 0 .25rem; letter-spacing: -.02em; }
+  h1 span { color: var(--accent); }
+  h2 { font-size: 1.05rem; margin: 2.5rem 0 .75rem; color: var(--accent-soft); text-transform: uppercase; letter-spacing: .08em; }
+  p { margin: .5rem 0; }
+  a { color: var(--accent-soft); }
+  .lead { color: var(--muted); margin-bottom: 0; }
+  .meta { color: var(--muted); font-size: .875rem; }
+  pre {
+    background: var(--code); border: 1px solid var(--line); border-radius: 10px;
+    padding: .9rem 1rem; overflow-x: auto; font-family: var(--mono); font-size: .85rem;
+    margin: .5rem 0 1rem;
+  }
+  code { font-family: var(--mono); font-size: .85em; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 1.25rem; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; }
+  tr:last-child td { border-bottom: none; }
+  .fp { font-family: var(--mono); font-size: .8rem; color: var(--muted); word-break: break-all; }
+  footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>__REPO_NAME__ <span>·</span> pacman repository</h1>
+  <p class="lead">Signed Arch Linux packages for BongoCat, rebuilt automatically whenever
+  <a href="https://github.com/vladelaina/BongoCat/releases">upstream</a> publishes a release.</p>
+  <p class="meta">Latest package: <strong>__LATEST_VERSION__</strong> · updated __UPDATED__</p>
+
+  <h2>Install</h2>
+<pre>curl -fsSL __SITE_URL__/setup.sh | sudo bash
+sudo pacman -S __REPO_NAME__</pre>
+  <p class="meta">The script verifies the signing key fingerprint below before trusting it.</p>
+
+  <h2>Or configure it by hand</h2>
+  <p>Add this to <code>/etc/pacman.conf</code>:</p>
+<pre> [__REPO_NAME__]
+ SigLevel = Required DatabaseOptional
+ Server = __SITE_URL__/$arch</pre>
+  <p>Then import and locally sign the repository key:</p>
+<pre>curl -fsSLO __SITE_URL__/__REPO_NAME__-repo.asc
+sudo pacman-key --add __REPO_NAME__-repo.asc
+sudo pacman-key --lsign-key __KEY_ID__
+sudo pacman -Syu</pre>
+
+  <h2>Packages</h2>
+  <div class="panel">
+    <table>
+      <thead><tr><th>Package</th><th>Version</th><th>Size</th><th>Download</th></tr></thead>
+      <tbody>
+__PACKAGES__
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Signing key</h2>
+  <p class="fp">__FINGERPRINT__</p>
+
+  <footer>
+    Packages are built from the tagged upstream sources on Arch Linux, signed, and published as a
+    pacman repository. BongoCat is licensed AGPL-3.0-only and bundles the Live2D Cubism SDK for Native,
+    which is distributed under the Live2D Proprietary Software License Agreement.
+  </footer>
+</main>
+</body>
+</html>

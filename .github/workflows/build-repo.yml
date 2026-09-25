@@ -1,0 +1,301 @@
+name: Arch repository
+
+# BongoCat is packaged from its upstream release sources and published as a
+# signed pacman repository on Cloudflare Pages. The pipeline polls upstream,
+# builds only when the version changed, and self heals a deployment that did not
+# make it to the edge.
+
+on:
+  schedule:
+    # Four times a day is enough to notice a release without hammering the API.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild and republish even when the version is already packaged
+        type: boolean
+        default: false
+      tag:
+        description: Upstream tag to package instead of the newest release (e.g. v1.13.1)
+        type: string
+        required: false
+  repository_dispatch:
+    types: [upstream-release]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: arch-repo
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || 'vladelaina/BongoCat' }}
+  PAGES_PROJECT: ${{ vars.PAGES_PROJECT || 'bongocat-arch' }}
+  STORE_TAG: ${{ vars.STORE_TAG || 'arch-repo-store' }}
+  KEEP_VERSIONS: ${{ vars.KEEP_VERSIONS || '3' }}
+  SITE_URL: ${{ vars.SITE_URL || format('https://{0}.pages.dev', vars.PAGES_PROJECT || 'bongocat-arch') }}
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  WRANGLER_SEND_METRICS: 'false'
+
+jobs:
+  detect:
+    name: Check upstream
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.detect.outputs.version }}
+      tag: ${{ steps.detect.outputs.tag }}
+      commit: ${{ steps.detect.outputs.commit }}
+      build: ${{ steps.detect.outputs.build }}
+      bump: ${{ steps.detect.outputs.bump }}
+      deploy: ${{ steps.detect.outputs.deploy }}
+      reason: ${{ steps.detect.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the newest upstream release
+        id: detect
+        env:
+          INPUT_FORCE: ${{ inputs.force }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          args=(--repo "$UPSTREAM_REPO" \
+                --store-repo "$GITHUB_REPOSITORY" \
+                --store-tag "$STORE_TAG" \
+                --site-url "$SITE_URL")
+          [[ $INPUT_FORCE == true ]] && args+=(--force)
+          [[ -n ${INPUT_TAG:-} ]] && args+=(--tag "$INPUT_TAG")
+
+          output=$(scripts/detect-upstream.sh "${args[@]}")
+          printf '%s\n' "$output" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Explain the decision
+        env:
+          REASON: ${{ steps.detect.outputs.reason }}
+          TAG: ${{ steps.detect.outputs.tag }}
+          COMMIT: ${{ steps.detect.outputs.commit }}
+          BUILD: ${{ steps.detect.outputs.build }}
+          DEPLOY: ${{ steps.detect.outputs.deploy }}
+        run: |
+          {
+            echo "### Upstream check"
+            echo
+            echo "- upstream tag: \`$TAG\` (commit \`${COMMIT:0:12}\`)"
+            echo "- decision: $REASON"
+            echo "- build: \`$BUILD\`, deploy: \`$DEPLOY\`"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build and sign
+    needs: detect
+    if: needs.detect.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: archlinux:base-devel
+    steps:
+      # The image ships a stale keyring and no git, and actions/checkout needs
+      # git, so this has to run before the repository is checked out.
+      - name: Refresh the container
+        run: |
+          set -eux
+          pacman -Sy --noconfirm --needed --disable-download-timeout archlinux-keyring
+          pacman -Su --noconfirm --disable-download-timeout
+          pacman -S --noconfirm --needed --disable-download-timeout git
+
+      - uses: actions/checkout@v4
+
+      - name: Install the PKGBUILD's dependencies
+        run: |
+          set -eux
+          source PKGBUILD
+          pacman -S --noconfirm --needed --disable-download-timeout \
+            "${makedepends[@]}" "${depends[@]}" gnupg curl jq zstd namcap
+
+      # Building the Live2D runtime means fetching the Cubism SDK and, through
+      # CMake, several pinned source archives. Reusing them keeps every build
+      # from pulling the same tens of megabytes again.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ./*.zip
+            ./*.tar.gz
+          key: bongocat-sources-${{ hashFiles('PKGBUILD') }}
+
+      - name: Build and sign the package
+        id: build
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+          BUMP: ${{ needs.detect.outputs.bump }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          : "${GPG_PRIVATE_KEY:?the GPG_PRIVATE_KEY secret is required}"
+
+          args=(--version "$VERSION" --out "$GITHUB_WORKSPACE/dist")
+          [[ $BUMP == true ]] && args+=(--bump-pkgrel)
+
+          # makepkg refuses to run as root, so the build runs as builder. The
+          # signing key travels through a file because su does not forward the
+          # step's secrets to the other user.
+          useradd -m builder
+          printf '%s\n' "$GPG_PRIVATE_KEY" >"$GITHUB_WORKSPACE/.gpg-key.asc"
+          printf '%s' "${GPG_PASSPHRASE:-}" >"$GITHUB_WORKSPACE/.gpg-passphrase"
+          chmod 600 "$GITHUB_WORKSPACE/.gpg-key.asc" "$GITHUB_WORKSPACE/.gpg-passphrase"
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+          su builder -c "cd '$GITHUB_WORKSPACE' && HOME=/home/builder \
+            scripts/build-package.sh ${args[*]} \
+              --key-file '$GITHUB_WORKSPACE/.gpg-key.asc' \
+              --passphrase-file '$GITHUB_WORKSPACE/.gpg-passphrase'"
+
+          rm -f "$GITHUB_WORKSPACE/.gpg-key.asc" "$GITHUB_WORKSPACE/.gpg-passphrase"
+          cat dist/build-info.env >>"$GITHUB_OUTPUT"
+
+      - name: Report the package
+        run: |
+          set -euo pipefail
+          cat dist/build-info.env
+          pkgfile=$(sed -n 's/^pkgfile=//p' dist/build-info.env)
+          size=$(sed -n 's/^size=//p' dist/build-info.env)
+          sha=$(sed -n 's/^sha256=//p' dist/build-info.env)
+          {
+            echo "### Package"
+            echo
+            echo '```'
+            ls -la "dist/$pkgfile" "dist/$pkgfile.sig"
+            du -h "dist/$pkgfile"
+            echo '```'
+            echo "- build: $((size / 1024)) KiB, sha256 \`$sha\`"
+            echo
+            echo "<details><summary>namcap (advisory)</summary>"
+            echo
+            echo '```'
+            namcap "dist/$pkgfile" || true
+            echo '```'
+            echo '</details>'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Store the package in the rolling release
+        run: |
+          set -euo pipefail
+          scripts/publish-store.sh \
+            --store-repo "$GITHUB_REPOSITORY" \
+            --store-tag "$STORE_TAG" \
+            --prune "$KEEP_VERSIONS" \
+            --dir "$GITHUB_WORKSPACE/dist" \
+            dist/*.pkg.tar.zst dist/*.pkg.tar.zst.sig
+
+  publish:
+    name: Publish to Cloudflare Pages
+    needs: [detect, build]
+    # A deployment is also refreshed when the site is behind the store, which is
+    # how an interrupted run repairs itself on the next schedule.
+    if: >-
+      always() && needs.detect.outputs.deploy == 'true'
+      && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Refresh the container
+        run: |
+          set -eux
+          pacman -Sy --noconfirm --needed --disable-download-timeout archlinux-keyring
+          pacman -Su --noconfirm --disable-download-timeout
+          pacman -S --noconfirm --needed --disable-download-timeout git
+
+      - uses: actions/checkout@v4
+
+      - name: Install the publishing tools
+        run: |
+          set -eux
+          pacman -S --noconfirm --needed --disable-download-timeout \
+            gnupg curl jq zstd libarchive nodejs npm
+
+      - name: Assemble the repository and the site
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          : "${GPG_PRIVATE_KEY:?the GPG_PRIVATE_KEY secret is required}"
+          scripts/assemble-repo.sh \
+            --keep "$KEEP_VERSIONS" \
+            --site-url "$SITE_URL" \
+            --store-repo "$GITHUB_REPOSITORY" \
+            --store-tag "$STORE_TAG"
+
+      # Runs the deployment through pacman itself: sync the database, read the
+      # metadata and download the package with signature verification.
+      - name: Verify the repository as a client would
+        run: scripts/verify-repo.sh --dir public
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          : "${CLOUDFLARE_API_TOKEN:?the CLOUDFLARE_API_TOKEN secret is required}"
+          : "${CLOUDFLARE_ACCOUNT_ID:?the CLOUDFLARE_ACCOUNT_ID secret is required}"
+
+          if ! output=$(npx --yes wrangler@4 pages project create "$PAGES_PROJECT" \
+                 --production-branch=main 2>&1); then
+            grep -qiE 'already exists|already taken|already have a project' <<<"$output" \
+              || { printf '%s\n' "$output"; exit 1; }
+          fi
+
+          npx --yes wrangler@4 pages deploy public \
+            --project-name "$PAGES_PROJECT" \
+            --branch main \
+            --commit-dirty=true
+
+      # Recorded only after the deployment succeeded, so a failed run is picked
+      # up again by the next schedule instead of being skipped as done.
+      - name: Record the packaged version
+        if: needs.detect.outputs.build == 'true'
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+          BUMP: ${{ needs.detect.outputs.bump }}
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # makepkg regenerates .SRCINFO and refuses to run as root, so the bump
+          # itself is applied as an unprivileged user while the commit that
+          # follows still runs here.
+          useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          args=("$VERSION")
+          [[ $BUMP == true ]] && args+=(--bump-pkgrel)
+          su builder -c "cd '$GITHUB_WORKSPACE' && scripts/set-pkgver.sh ${args[*]}"
+
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo 'PKGBUILD already records this version'
+            exit 0
+          fi
+          git commit -m "chore: package bongocat $VERSION [skip ci]"
+          git push origin "HEAD:${{ github.ref_name }}"
+
+      - name: Summarise the deployment
+        run: |
+          {
+            echo "### Deployment"
+            echo
+            echo "- repository: $SITE_URL"
+            echo "- Cloudflare Pages project: \`$PAGES_PROJECT\`"
+            echo
+            echo "Add it to a machine with:"
+            echo
+            echo '```'
+            echo "curl -fsSL $SITE_URL/setup.sh | sudo bash"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"

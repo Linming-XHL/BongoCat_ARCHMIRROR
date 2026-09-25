@@ -1,0 +1,17 @@
+# makepkg work tree and artefacts
+/src/
+/pkg/
+/dist/
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
+
+# sources makepkg downloads into the working directory
+*.tar.gz
+*.zip
+
+# pipeline scratch
+/packages/
+/public/
+/.gpg-key-id
+/.gpg-key.asc
+/.gpg-passphrase

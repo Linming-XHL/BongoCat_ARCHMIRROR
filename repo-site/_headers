@@ -1,0 +1,37 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  X-Frame-Options: DENY
+
+/x86_64/*.pkg.tar.zst
+  Cache-Control: public, max-age=31536000, immutable
+
+/x86_64/*.pkg.tar.zst.sig
+  Cache-Control: public, max-age=31536000, immutable
+
+/x86_64/__REPO_NAME__.db
+  Cache-Control: public, max-age=300
+
+/x86_64/__REPO_NAME__.db.sig
+  Cache-Control: public, max-age=300
+
+/x86_64/__REPO_NAME__.db.tar.gz
+  Cache-Control: public, max-age=300
+
+/x86_64/__REPO_NAME__.db.tar.gz.sig
+  Cache-Control: public, max-age=300
+
+/x86_64/__REPO_NAME__.files
+  Cache-Control: public, max-age=300
+
+/x86_64/__REPO_NAME__.files.sig
+  Cache-Control: public, max-age=300
+
+/x86_64/__REPO_NAME__.files.tar.gz
+  Cache-Control: public, max-age=300
+
+/x86_64/__REPO_NAME__.files.tar.gz.sig
+  Cache-Control: public, max-age=300
+
+index.html
+  Cache-Control: public, max-age=300
