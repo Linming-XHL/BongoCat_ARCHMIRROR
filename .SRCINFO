@@ -1,7 +1,7 @@
 pkgbase = bongocat
 	pkgdesc = Desktop pet that reacts to your keyboard and mouse input (Live2D on SDL3 and OpenGL)
 	pkgver = 1.13.1
-	pkgrel = 1
+	pkgrel = 2
 	url = https://github.com/vladelaina/BongoCat
 	arch = x86_64
 	license = AGPL-3.0-only

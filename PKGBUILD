@@ -6,7 +6,7 @@
 
 pkgname=bongocat
 pkgver=1.13.1
-pkgrel=1
+pkgrel=2
 pkgdesc='Desktop pet that reacts to your keyboard and mouse input (Live2D on SDL3 and OpenGL)'
 arch=('x86_64')
 url='https://github.com/vladelaina/BongoCat'
