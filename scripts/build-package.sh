@@ -108,6 +108,8 @@ sigfile="$pkgfile.sig"
 sha=$(sha256sum "$pkgfile" | awk '{print $1}')
 log "built $(basename "$pkgfile"): $((size / 1024)) KiB, sha256 $sha"
 
+# The workflow reads this file, which also works when the build runs as a user
+# that cannot write the runner's command files.
 cat >"$out_dir/build-info.env" <<EOF
 pkgfile=$(basename "$pkgfile")
 sigfile=$(basename "$sigfile")
@@ -115,7 +117,4 @@ version=$full_version
 size=$size
 sha256=$sha
 EOF
-
-if [[ -n ${GITHUB_OUTPUT:-} ]]; then
-  cat "$out_dir/build-info.env" >>"$GITHUB_OUTPUT"
-fi
+ci_append "${GITHUB_OUTPUT:-}" "$(cat "$out_dir/build-info.env")"

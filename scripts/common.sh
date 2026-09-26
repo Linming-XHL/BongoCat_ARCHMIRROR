@@ -17,6 +17,22 @@ require_cmd() {
   done
 }
 
+# ci_append <command file> <text>: appends KEY=VALUE lines to a GitHub Actions
+# command file ($GITHUB_OUTPUT, $GITHUB_ENV, $GITHUB_STEP_SUMMARY). The runner
+# creates those files as root while parts of the pipeline run as an unprivileged
+# user, so a file that cannot be written is skipped instead of failing the step;
+# the same information is always written to a normal file as well.
+ci_append() {
+  local file=${1:-} text=${2:-}
+  [[ -n $file ]] || return 0
+  if [[ -e $file ]]; then
+    [[ -w $file ]] || return 0
+  else
+    [[ -w $(dirname "$file") ]] || return 0
+  fi
+  printf '%s\n' "$text" >>"$file"
+}
+
 # pkgbuild_field <field> [pkgbuild]: reads a plain assignment without executing
 # the rest of the PKGBUILD.
 pkgbuild_field() {

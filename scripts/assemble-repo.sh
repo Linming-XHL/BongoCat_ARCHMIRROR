@@ -47,7 +47,6 @@ repo_name=${repo_name:-$(pkgbuild_field pkgname)}
 gpg_import_key
 key_id=$(gpg_key_id)
 fingerprint=$(gpg_fingerprint "$key_id")
-github_repo=${GITHUB_REPOSITORY:-}
 
 # ---- collect the packages --------------------------------------------------
 if [[ -n $from_dir ]]; then
@@ -168,16 +167,12 @@ fi
 
 log "deployment tree ready at $out_dir ($(du -sh "$out_dir" | cut -f1), $latest, $(du -a "$out_dir" | wc -l) files)"
 
-if [[ -n ${GITHUB_OUTPUT:-} ]]; then
-  cat <<EOF >>"$GITHUB_OUTPUT"
-public_dir=$out_dir
+ci_append "${GITHUB_OUTPUT:-}" "public_dir=$out_dir
 latest_version=$latest
-fingerprint=$fingerprint
-EOF
-fi
+fingerprint=$fingerprint"
 
 # The workflow commits the version bump only after a successful deployment.
-if [[ -n ${GITHUB_STEP_SUMMARY:-} && -n $github_repo ]]; then
+if [[ -w ${GITHUB_STEP_SUMMARY:-} ]]; then
   {
     printf '### Repository contents\n\n'
     printf '| Package | Version | Size | sha256 |\n| --- | --- | --- | --- |\n'

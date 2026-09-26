@@ -39,7 +39,7 @@ if [[ -n $prune ]]; then
   store_prune "$prune" "${store_dir:-.}"
 fi
 
-if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
+if [[ -w ${GITHUB_STEP_SUMMARY:-} ]]; then
   {
     printf '### Release store\n\n'
     while IFS=$'\t' read -r _ name version; do

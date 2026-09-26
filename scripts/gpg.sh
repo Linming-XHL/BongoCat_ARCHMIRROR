@@ -59,13 +59,10 @@ gpg_import_key() {
     || die "no secret key for $key_id"
 
   printf '%s\n' "$key_id" >"$REPO_ROOT/.gpg-key-id"
-  if [[ -n ${GITHUB_ENV:-} ]]; then
-    printf 'GNUPG_KEY_ID=%s\n' "$key_id" >>"$GITHUB_ENV"
-  fi
-  if [[ -n ${GITHUB_OUTPUT:-} ]]; then
-    printf 'key_id=%s\nfingerprint=%s\n' "$key_id" "$(gpg_fingerprint "$key_id")" \
-      >>"$GITHUB_OUTPUT"
-  fi
+  ci_append "${GITHUB_ENV:-}" "GNUPG_KEY_ID=$key_id"
+  ci_append "${GITHUB_OUTPUT:-}" \
+    "key_id=$key_id
+fingerprint=$(gpg_fingerprint "$key_id")"
   log "signing with key $key_id ($(gpg_fingerprint "$key_id"))"
 }
 
