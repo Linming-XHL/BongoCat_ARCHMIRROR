@@ -236,6 +236,7 @@ jobs:
             gnupg curl jq zstd libarchive nodejs npm
 
       - name: Assemble the repository and the site
+        id: assemble
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
@@ -274,25 +275,35 @@ jobs:
             --commit-dirty=true
 
       # Recorded only after the deployment succeeded, so a failed run is picked
-      # up again by the next schedule instead of being skipped as done.
-      - name: Record the packaged version
-        if: needs.detect.outputs.build == 'true'
+      # up again by the next schedule instead of being skipped as done. This also
+      # runs when nothing was built: a recovered deployment still has to leave
+      # the PKGBUILD describing what the repository now serves.
+      - name: Record the published version
         env:
           VERSION: ${{ needs.detect.outputs.version }}
           BUMP: ${{ needs.detect.outputs.bump }}
+          BUILD: ${{ needs.detect.outputs.build }}
+          DEPLOYED_VERSION: ${{ steps.assemble.outputs.latest_version }}
         run: |
           set -euo pipefail
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
+          if [[ $BUILD == true ]]; then
+            args=("$VERSION")
+            [[ $BUMP == true ]] && args+=(--bump-pkgrel)
+          else
+            # Nothing was rebuilt, so take the version the repository serves.
+            [[ $DEPLOYED_VERSION == *-* ]] || { echo "no version to record ($DEPLOYED_VERSION)"; exit 0; }
+            args=("${DEPLOYED_VERSION%-*}" --pkgrel "${DEPLOYED_VERSION##*-}")
+          fi
+
           # makepkg regenerates .SRCINFO and refuses to run as root, so the bump
           # itself is applied as an unprivileged user while the commit that
           # follows still runs here.
           id -u builder >/dev/null 2>&1 || useradd -m -s /bin/bash builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
-          args=("$VERSION")
-          [[ $BUMP == true ]] && args+=(--bump-pkgrel)
           su builder -c "cd '$GITHUB_WORKSPACE' && scripts/set-pkgver.sh ${args[*]}"
 
           git add PKGBUILD .SRCINFO
@@ -300,7 +311,7 @@ jobs:
             echo 'PKGBUILD already records this version'
             exit 0
           fi
-          git commit -m "chore: package bongocat $VERSION [skip ci]"
+          git commit -m "chore: package bongocat ${args[0]}-$(sed -n 's/^pkgrel=//p' PKGBUILD) [skip ci]"
           git push origin "HEAD:${{ github.ref_name }}"
 
       - name: Summarise the deployment

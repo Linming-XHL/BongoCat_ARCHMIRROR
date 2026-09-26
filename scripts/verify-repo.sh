@@ -26,6 +26,10 @@ while (( $# )); do
 done
 
 require_cmd gpg sha256sum
+[[ -d $dir ]] || die "no such deployment directory: $dir"
+# The pacman configuration below uses a file:// server, and such a URL has to be
+# absolute; a relative --dir would otherwise fail with "Bad file:// URL".
+dir=$(cd "$dir" && pwd)
 repo_name=${repo_name:-$(pkgbuild_field pkgname)}
 pkgname=${pkgname:-$repo_name}
 arch=$(pkgbuild_field arch)
