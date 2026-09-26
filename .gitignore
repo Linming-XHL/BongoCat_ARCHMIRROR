@@ -15,3 +15,5 @@
 /.gpg-key-id
 /.gpg-key.asc
 /.gpg-passphrase
+
+private.key

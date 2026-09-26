@@ -28,7 +28,7 @@ pacman 包、用 GPG 签名、重建软件源索引，并推送到 Cloudflare Pa
    └──────────────────────────────┘   └─────────────┬─────────────┘
                                                     ▼
                                     Cloudflare Pages（全球 CDN）
-                                    https://<project>.pages.dev/x86_64
+                                    https://bongocat.zakofox.cn/x86_64
                                                     │
                                                     ▼
                                     开发机：pacman -Syu bongocat
@@ -39,7 +39,7 @@ pacman 包、用 GPG 签名、重建软件源索引，并推送到 Cloudflare Pa
 一键配置（会先校验签名密钥指纹，再写入 `/etc/pacman.conf`）：
 
 ```bash
-curl -fsSL https://<你的站点>/setup.sh | sudo bash
+curl -fsSL https://bongocat.zakofox.cn/setup.sh | sudo bash
 sudo pacman -S bongocat
 ```
 
@@ -48,13 +48,13 @@ sudo pacman -S bongocat
 ```ini
 [bongocat]
 SigLevel = Required DatabaseOptional
-Server = https://<你的站点>/$arch
+Server = https://bongocat.zakofox.cn/$arch
 ```
 
 然后导入并本地签名仓库公钥（指纹见站点首页，务必核对）：
 
 ```bash
-curl -fsSLO https://<你的站点>/bongocat-repo.asc
+curl -fsSLO https://bongocat.zakofox.cn/bongocat-repo.asc
 sudo pacman-key --add bongocat-repo.asc
 sudo pacman-key --lsign-key <KEY_ID>
 sudo pacman -Syu
@@ -106,9 +106,18 @@ gpg --fingerprint "$KEY_ID"                                  # 记下指纹，�
 1. 在 Cloudflare 控制台建一个 API Token：**My Profile → API Tokens → Create Token**，
    权限选 `Account → Cloudflare Pages → Edit`。
 2. 记下 **Account ID**（控制台右侧栏或 URL 里）。
-3. Pages 项目不用手动建，工作流首次发布会自动 `wrangler pages project create`。
-   想用自定义域名（例如 `repo.example.com`）时，在 Pages 项目里加 Custom domain 即可，
-   然后把 `SITE_URL` 变量指向它 —— 站点里生成的 `Server` 行和 `setup.sh` 都用这个地址。
+3. Pages 项目不用手动建，工作流首次发布会自动 `wrangler pages project create`
+   （默认项目名 `bongocat-arch`，因此 `https://bongocat-arch.pages.dev` 始终可用作备用地址）。
+4. 自定义域名 `bongocat.zakofox.cn` 需要在 Pages 项目里挂上去：
+   项目 → **Custom domains** → **Set up a domain** → 填 `bongocat.zakofox.cn`。
+   因为 `zakofox.cn` 就在同一个 Cloudflare 账户下，CNAME 记录会自动创建，之后
+   `https://bongocat.zakofox.cn` 与 `*.pages.dev` 提供完全相同的内容。
+
+   两点注意：
+   - 不要给这个域名加 **Cloudflare Access**，否则工作流里那条“站点是否落后于存储”的自愈检查
+     读不到索引文件；
+   - 不要给这个域名加 "Cache Everything" 之类的 Cache Rule —— 索引文件的缓存策略由仓库里的
+     `_headers` 决定（包体 1 年不可变、索引 300 秒），强行全缓存会让 `pacman -Syu` 看到旧索引。
 
 ### 3. 配置 Secrets 与 Variables
 
@@ -121,10 +130,12 @@ gpg --fingerprint "$KEY_ID"                                  # 记下指纹，�
 | Secret | `CLOUDFLARE_API_TOKEN` | Pages 部署令牌 |
 | Secret | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账户 ID |
 | Variable | `PAGES_PROJECT` | 可选，Pages 项目名，默认 `bongocat-arch` |
-| Variable | `SITE_URL` | 可选，站点地址，默认 `https://<PAGES_PROJECT>.pages.dev` |
+| Variable | `SITE_URL` | 可选，站点地址，默认 `https://bongocat.zakofox.cn` |
 | Variable | `UPSTREAM_REPO` | 可选，上游仓库，默认 `vladelaina/BongoCat` |
 | Variable | `KEEP_VERSIONS` | 可选，保留最近几个版本，默认 `3` |
 | Variable | `STORE_TAG` | 可选，滚动存储用的 tag，默认 `arch-repo-store` |
+
+`SITE_URL` 会写进客户端的 `pacman.conf`、`setup.sh` 和站点首页，所以要填客户端最终使用的地址。
 
 ### 4. 首次运行
 
@@ -189,7 +200,7 @@ makepkg -f --noconfirm
 GPG_PRIVATE_KEY="$(cat private.key)" scripts/build-package.sh --version 1.13.1 --out dist
 
 # 组装部署目录（需要能访问滚动存储，即 GH_TOKEN + STORE_REPO）
-GH_TOKEN=... STORE_REPO=owner/repo scripts/assemble-repo.sh --keep 3 --site-url https://example.pages.dev
+GH_TOKEN=... STORE_REPO=owner/repo scripts/assemble-repo.sh --keep 3 --site-url https://bongocat.zakofox.cn
 
 # 以客户端视角验证产物：同步索引 + 下载 + 验签（需要 root 才能真正跑 pacman）
 sudo scripts/verify-repo.sh --dir public

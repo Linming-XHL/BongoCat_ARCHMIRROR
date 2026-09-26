@@ -29,12 +29,24 @@ concurrency:
   group: arch-repo
   cancel-in-progress: false
 
+# Container jobs run their steps with "sh", which is bash in POSIX mode: the dot
+# builtin then searches PATH instead of the working directory (so "source
+# PKGBUILD" cannot find the file) and bash extensions such as arrays are off.
+# Every step here is bash, so ask for bash explicitly.
+defaults:
+  run:
+    shell: bash
+
 env:
   UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || 'vladelaina/BongoCat' }}
   PAGES_PROJECT: ${{ vars.PAGES_PROJECT || 'bongocat-arch' }}
   STORE_TAG: ${{ vars.STORE_TAG || 'arch-repo-store' }}
   KEEP_VERSIONS: ${{ vars.KEEP_VERSIONS || '3' }}
-  SITE_URL: ${{ vars.SITE_URL || format('https://{0}.pages.dev', vars.PAGES_PROJECT || 'bongocat-arch') }}
+  # The repository is served from the custom domain attached to the Pages
+  # project; <project>.pages.dev keeps working as a fallback. This value ends up
+  # in the clients' pacman.conf, in setup.sh and on the landing page, so it must
+  # be the address clients should use.
+  SITE_URL: ${{ vars.SITE_URL || 'https://bongocat.zakofox.cn' }}
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   WRANGLER_SEND_METRICS: 'false'
 
@@ -102,7 +114,9 @@ jobs:
         run: |
           set -eux
           pacman -Sy --noconfirm --needed --disable-download-timeout archlinux-keyring
-          pacman -Su --noconfirm --disable-download-timeout
+          # --overwrite keeps a rolling image from failing on files that moved
+          # between packages; nothing in a throwaway container is worth keeping.
+          pacman -Su --noconfirm --disable-download-timeout --overwrite='*'
           pacman -S --noconfirm --needed --disable-download-timeout git
 
       - uses: actions/checkout@v4
@@ -110,7 +124,11 @@ jobs:
       - name: Install the PKGBUILD's dependencies
         run: |
           set -eux
-          source PKGBUILD
+          cd "$GITHUB_WORKSPACE"
+          [[ -f PKGBUILD ]] || { echo "::error::PKGBUILD is missing from $PWD"; ls -la; exit 1; }
+          # The leading ./ matters: without a slash the dot builtin looks the
+          # name up in PATH when the shell runs in POSIX mode.
+          source ./PKGBUILD
           pacman -S --noconfirm --needed --disable-download-timeout \
             "${makedepends[@]}" "${depends[@]}" gnupg curl jq zstd namcap
 
@@ -141,7 +159,7 @@ jobs:
           # makepkg refuses to run as root, so the build runs as builder. The
           # signing key travels through a file because su does not forward the
           # step's secrets to the other user.
-          useradd -m builder
+          id -u builder >/dev/null 2>&1 || useradd -m -s /bin/bash builder
           printf '%s\n' "$GPG_PRIVATE_KEY" >"$GITHUB_WORKSPACE/.gpg-key.asc"
           printf '%s' "${GPG_PASSPHRASE:-}" >"$GITHUB_WORKSPACE/.gpg-passphrase"
           chmod 600 "$GITHUB_WORKSPACE/.gpg-key.asc" "$GITHUB_WORKSPACE/.gpg-passphrase"
@@ -206,7 +224,7 @@ jobs:
         run: |
           set -eux
           pacman -Sy --noconfirm --needed --disable-download-timeout archlinux-keyring
-          pacman -Su --noconfirm --disable-download-timeout
+          pacman -Su --noconfirm --disable-download-timeout --overwrite='*'
           pacman -S --noconfirm --needed --disable-download-timeout git
 
       - uses: actions/checkout@v4
@@ -271,7 +289,7 @@ jobs:
           # makepkg regenerates .SRCINFO and refuses to run as root, so the bump
           # itself is applied as an unprivileged user while the commit that
           # follows still runs here.
-          useradd -m builder
+          id -u builder >/dev/null 2>&1 || useradd -m -s /bin/bash builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
           args=("$VERSION")
           [[ $BUMP == true ]] && args+=(--bump-pkgrel)
