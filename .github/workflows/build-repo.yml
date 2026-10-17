@@ -361,7 +361,12 @@ jobs:
             echo 'the PKGBUILDs already record these versions'
             exit 0
           fi
-          git commit -m "chore: package bongocat-x ${args[2]}-$(sed -n 's/^pkgrel=//p' packages/${args[0]}/PKGBUILD) [skip ci]"
+          # The message must not touch ${args[2]}: when bump is false the array
+          # holds only --version and its value, and set -u aborts the step there,
+          # taking the SDK's freshly bumped pkgrel down with it.
+          primary_ver=$(sed -n 's/^pkgver=//p' "packages/$PRIMARY_PACKAGE/PKGBUILD")
+          primary_rel=$(sed -n 's/^pkgrel=//p' "packages/$PRIMARY_PACKAGE/PKGBUILD")
+          git commit -m "chore: package $PRIMARY_PACKAGE $primary_ver-$primary_rel [skip ci]"
           git push origin "HEAD:${{ github.ref_name }}"
 
       - name: Summarise the deployment
