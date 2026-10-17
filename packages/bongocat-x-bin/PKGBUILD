@@ -8,7 +8,7 @@
 
 pkgname=bongocat-x-bin
 pkgver=2.2.0
-pkgrel=1
+pkgrel=2
 pkgdesc='Desktop pet that reacts to your keyboard and mouse input (Live2D on SDL3, upstream binary)'
 arch=('x86_64')
 url='https://github.com/TianMengLucky/BongoCat-X'
