@@ -1,0 +1,4 @@
+# Paths every live2d-sdk-nonfree package must contain, one per line.
+# build-package.sh checks the built archive against this list.
+usr/lib/bongocat-x/live2d/libLive2DCubismCore.so
+usr/share/licenses/live2d-sdk-nonfree/LICENSE

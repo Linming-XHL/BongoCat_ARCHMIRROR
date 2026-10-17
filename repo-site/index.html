@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__REPO_NAME__ — Arch Linux package repository</title>
-<meta name="description" content="Signed pacman repository for BongoCat, built automatically from upstream releases.">
+<meta name="description" content="Signed pacman repository for BongoCat-X, built automatically from upstream releases.">
 <style>
   :root {
     --bg: #14121a;
@@ -51,14 +51,18 @@
 <body>
 <main>
   <h1>__REPO_NAME__ <span>·</span> pacman repository</h1>
-  <p class="lead">Signed Arch Linux packages for BongoCat, rebuilt automatically whenever
-  <a href="https://github.com/vladelaina/BongoCat/releases">upstream</a> publishes a release.</p>
+  <p class="lead">Signed Arch Linux packages for BongoCat-X, rebuilt automatically whenever
+  <a href="https://github.com/TianMengLucky/BongoCat-X/releases">upstream</a> publishes a release.</p>
   <p class="meta">Latest package: <strong>__LATEST_VERSION__</strong> · updated __UPDATED__</p>
 
   <h2>Install</h2>
 <pre>curl -fsSL __SITE_URL__/setup.sh | sudo bash
-sudo pacman -S __REPO_NAME__</pre>
+sudo pacman -S __PRIMARY_PACKAGE__</pre>
   <p class="meta">The script verifies the signing key fingerprint below before trusting it.</p>
+  <p class="meta"><code>bongocat-x-bin</code> ships the Live2D renderer but not the Cubism Core
+  library, which Live2D licenses prohibit redistributing. Install
+  <code>live2d-sdk-nonfree</code> from the same repository to enable Live2D rendering:
+  <code>sudo pacman -S live2d-sdk-nonfree</code>.</p>
 
   <h2>Or configure it by hand</h2>
   <p>Add this to <code>/etc/pacman.conf</code>:</p>
@@ -80,14 +84,18 @@ __PACKAGES__
       </tbody>
     </table>
   </div>
+  <p class="meta">Building from source yourself? <code>bongocat-x-git</code> compiles upstream's
+  <code>dev</code> branch together with the Cubism SDK on your machine; it is not published here
+  because a repository update should not compile anything on the client.</p>
 
   <h2>Signing key</h2>
   <p class="fp">__FINGERPRINT__</p>
 
   <footer>
-    Packages are built from the tagged upstream sources on Arch Linux, signed, and published as a
-    pacman repository. BongoCat is licensed AGPL-3.0-only and bundles the Live2D Cubism SDK for Native,
-    which is distributed under the Live2D Proprietary Software License Agreement.
+    Packages are built from the tagged upstream releases on Arch Linux, signed, and published as a
+    pacman repository. BongoCat-X is licensed AGPL-3.0-only; the Live2D Cubism Core library is
+    distributed separately under the Live2D Proprietary Software License Agreement, and BongoCat-X
+    is not affiliated with Live2D Inc.
   </footer>
 </main>
 </body>

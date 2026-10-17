@@ -18,7 +18,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/gpg.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/store-api.sh"
 
 out_dir=$REPO_ROOT/public
-store_dir=$REPO_ROOT/packages
+store_dir=$REPO_ROOT/store
 site_url=${SITE_URL:-}
 repo_name=''
 keep=${KEEP_VERSIONS:-3}
@@ -42,7 +42,19 @@ done
 require_cmd repo-add bsdtar sed awk sha256sum jq numfmt
 [[ $keep =~ ^[0-9]+$ ]] || die "--keep expects a number, got: $keep"
 (( keep >= 1 )) || die '--keep must keep at least one package, otherwise the repository would be empty'
-repo_name=${repo_name:-$(pkgbuild_field pkgname)}
+# The repository holds several packages, so its name is a property of the
+# repository, not of any one PKGBUILD. repo.conf is the single place to set it;
+# an explicit --repo-name still wins, so a dry run can use a different name.
+if [[ -z $repo_name ]]; then
+  [[ -f $REPO_ROOT/repo.conf ]] || die 'repo.conf is missing: it names the repository'
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/repo.conf"
+  [[ -n $repo_name ]] || die 'repo.conf does not set repo_name'
+fi
+# Which package the landing page leads with. Without this the "latest" version
+# is the maximum across every package, which would advertise the SDK revision
+# (5.x) as if it were the version of the application.
+primary_package=${PRIMARY_PACKAGE:-$repo_name}
 
 gpg_import_key
 key_id=$(gpg_key_id)
@@ -101,12 +113,15 @@ database="$out_dir/x86_64/$repo_name.db.tar.gz"
 gpg --batch --verify "$database.sig" "$database" >/dev/null 2>&1 \
   || die 'the database signature does not verify'
 
-declare -A entry_version=() entry_file=()
-while IFS=$'\t' read -r file version; do
+declare -A entry_version=() entry_file=() entry_name=()
+while IFS=$'\t' read -r file version name; do
   entry_version[$file]=$version
   entry_file[$file]=1
+  entry_name[$file]=$name
 done < <(db_descriptions "$database" \
-  | awk '/^%FILENAME%$/ { getline; file=$0; next } /^%VERSION%$/ { getline; print file "\t" $0 }')
+  | awk '/^%FILENAME%$/ { getline; file=$0; next }
+         /^%VERSION%$/ { getline; version=$0; next }
+         /^%NAME%$/ { getline; print file "\t" version "\t" $0; next }')
 
 (( ${#entry_file[@]} )) || die 'the database has no package entries'
 for file in "${!entry_file[@]}"; do
@@ -116,7 +131,19 @@ for file in "${!entry_file[@]}"; do
     || die "the database references $file, which has no signature"
 done
 
-latest=$(printf '%s\n' "${entry_version[@]}" | sort -V | tail -n1)
+# The application version, not the newest version of anything in the database:
+# the SDK package has its own, unrelated version series.
+latest=''
+for file in "${!entry_file[@]}"; do
+  if [[ ${entry_name[$file]:-$repo_name} == "$primary_package" ]]; then
+    latest=${entry_version[$file]}
+    break
+  fi
+done
+if [[ -z $latest ]]; then
+  latest=$(printf '%s\n' "${entry_version[@]}" | sort -V | tail -n1)
+  warn "the database has no $primary_package entry; the landing page shows $latest instead"
+fi
 
 # ---- the site itself -------------------------------------------------------
 gpg --batch --armor --export "$key_id" >"$out_dir/$repo_name-repo.asc" \
@@ -126,11 +153,12 @@ packages_html=''
 packages_json='[]'
 for file in "${!entry_file[@]}"; do
   version=${entry_version[$file]}
+  name=${entry_name[$file]:-$repo_name}
   size=$(stat -c%s "$out_dir/x86_64/$file")
   human=$(numfmt --to=iec-i --suffix=B --format='%.1f' "$size" 2>/dev/null || printf '%s bytes' "$size")
   sha=$(sha256sum "$out_dir/x86_64/$file" | awk '{print $1}')
-  packages_html+="        <tr><td>$repo_name</td><td>$version</td><td>$human</td><td><a href=\"x86_64/$file\">$file</a><br><span class=\"fp\">sha256 $sha</span></td></tr>"$'\n'
-  packages_json=$(jq -c --arg n "$repo_name" --arg v "$version" --arg f "$file" \
+  packages_html+="        <tr><td>$name</td><td>$version</td><td>$human</td><td><a href=\"x86_64/$file\">$file</a><br><span class=\"fp\">sha256 $sha</span></td></tr>"$'\n'
+  packages_json=$(jq -c --arg n "$name" --arg v "$version" --arg f "$file" \
     --argjson s "$size" --arg sha "$sha" \
     '. + [{name: $n, version: $v, filename: $f, size: $s, sha256: $sha}]' <<<"$packages_json")
 done
@@ -139,6 +167,7 @@ render() { # render <source> <destination>
   local src=$1 dst=$2
   sed -e "s|__SITE_URL__|$(sed_escape "$site_url")|g" \
       -e "s|__REPO_NAME__|$(sed_escape "$repo_name")|g" \
+      -e "s|__PRIMARY_PACKAGE__|$(sed_escape "$primary_package")|g" \
       -e "s|__KEY_ID__|$(sed_escape "$key_id")|g" \
       -e "s|__FINGERPRINT_COMPACT__|$(sed_escape "$fingerprint")|g" \
       -e "s|__FINGERPRINT__|$(sed_escape "$(format_fingerprint "$fingerprint")")|g" \
@@ -155,7 +184,6 @@ format_fingerprint() {
 }
 
 render "$REPO_ROOT/repo-site/index.html" "$out_dir/index.html"
-install -m 644 "$REPO_ROOT/repo-site/_headers" "$out_dir/_headers"
 render "$REPO_ROOT/repo-site/_headers" "$out_dir/_headers"
 render "$REPO_ROOT/repo-site/setup.sh" "$out_dir/setup.sh"
 chmod 755 "$out_dir/setup.sh"
@@ -177,7 +205,7 @@ if [[ -w ${GITHUB_STEP_SUMMARY:-} ]]; then
     printf '### Repository contents\n\n'
     printf '| Package | Version | Size | sha256 |\n| --- | --- | --- | --- |\n'
     for file in "${!entry_file[@]}"; do
-      printf '| %s | %s | %s | `%s` |\n' "$repo_name" "${entry_version[$file]}" \
+      printf '| %s | %s | %s | `%s` |\n' "${entry_name[$file]:-$repo_name}" "${entry_version[$file]}" \
         "$(numfmt --to=iec-i --suffix=B --format='%.1f' "$(stat -c%s "$out_dir/x86_64/$file")" 2>/dev/null || echo "?")" \
         "$(sha256sum "$out_dir/x86_64/$file" | cut -c1-16)"
     done

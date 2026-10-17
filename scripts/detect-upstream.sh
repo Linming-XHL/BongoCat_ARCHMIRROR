@@ -8,20 +8,29 @@
 #   commit        commit the upstream tag points at
 #   source_url    URL of the release source archive
 #   build         "true" when the package has to be rebuilt
+#   bump          "true" when only pkgrel has to move
 #   deploy        "true" when the Cloudflare Pages deployment has to be refreshed
 #   reason        human readable explanation of the decision
+#
+# The version comparison is against the -bin package, which is the one that
+# follows upstream releases; the SDK package is pinned to the SDK revision and
+# does not change when upstream does.
 #
 # Usage: detect-upstream.sh [--repo OWNER/REPO] [--tag TAG] [--force]
 #                           [--store-repo OWNER/REPO] [--store-tag TAG]
 #                           [--repo-name NAME] [--site-url URL]
+#                           [--package NAME]
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/store-api.sh"
 
-upstream_repo='vladelaina/BongoCat'
+upstream_repo=''
 requested_tag=''
 site_url=''
 force=false
+# Overridden by PRIMARY_PACKAGE from repo.conf below, so the package that
+# tracks upstream releases is named in one place.
+package=''
 
 while (( $# )); do
   case $1 in
@@ -31,16 +40,43 @@ while (( $# )); do
     --store-tag)   STORE_TAG=$2; shift 2 ;;
     --repo-name)   repo_name=$2; shift 2 ;;
     --site-url)    site_url=$2; shift 2 ;;
+    --package)     package=$2; shift 2 ;;
     --force)       force=true; shift ;;
-    -h|--help)     sed -n '2,18p' "$0"; exit 0 ;;
+    -h|--help)     sed -n '2,19p' "$0"; exit 0 ;;
     *)             die "unknown argument: $1" ;;
   esac
 done
 
 require_cmd curl jq tar sed
-repo_name=${repo_name:-$(pkgbuild_field pkgname)}
-current_pkgver=$(pkgbuild_field pkgver)
-current_pkgrel=$(pkgbuild_field pkgrel)
+# shellcheck disable=SC1091
+source "$REPO_ROOT/repo.conf"
+[[ -n $repo_name ]] || die 'repo.conf does not set repo_name'
+upstream_repo=${upstream_repo:-$UPSTREAM_REPO}
+[[ -n $upstream_repo ]] || die 'no upstream repository: pass --repo or set UPSTREAM_REPO in repo.conf'
+package=${package:-$PRIMARY_PACKAGE}
+[[ -n $package ]] || die 'repo.conf does not set PRIMARY_PACKAGE, and --package was not given'
+
+# Every package the pipeline builds. A package that cannot be found here is an
+# error rather than a silently skipped build, because the deployment would then
+# drop it from the repository.
+for name in "${PUBLISHED_PACKAGES[@]}"; do
+  found=''
+  for dir in $(package_dirs); do
+    [[ $(package_name "$dir") == "$name" ]] && found=$dir && break
+  done
+  [[ -n $found ]] || die "repo.conf lists $name in PUBLISHED_PACKAGES, but packages/ has no such package"
+done
+
+# The package whose version tracks upstream releases, located by name so the
+# order of directories in packages/ does not matter.
+pkgbuild=''
+for dir in $(package_dirs); do
+  [[ $(package_name "$dir") == "$package" ]] || continue
+  pkgbuild=$dir/PKGBUILD
+done
+[[ -n $pkgbuild ]] || die "no such package: $package"
+current_pkgver=$(pkgbuild_field pkgver "$pkgbuild")
+current_pkgrel=$(pkgbuild_field pkgrel "$pkgbuild")
 
 # ---- upstream release ------------------------------------------------------
 gh_auth_args
@@ -81,23 +117,24 @@ if $force; then
   reason="forced rebuild of $tag"
 fi
 
-# The site is refreshed whenever it serves a different package than the store
+# The site is refreshed whenever it serves a different package set than the store
 # holds. That way an interrupted deployment heals on the next scheduled run
 # instead of leaving the repository stale until someone notices.
 deploy=$build
 if ! $build && [[ -n $site_url && -n $STORE_REPO ]]; then
-  store_version=$(store_latest_version)
-  site_version=''
-  if [[ -n $store_version ]]; then
-    db=$(mktemp) || die 'cannot create a temporary file'
-    if curl -fsSL --max-time 60 "$site_url/x86_64/$repo_name.db.tar.gz" -o "$db" 2>/dev/null; then
-      site_version=$(db_versions "$db" | sort -V | tail -n1)
-    fi
-    rm -f "$db"
-    if [[ $site_version != "$store_version" ]]; then
-      deploy=true
-      reason="the store holds $store_version while the site serves ${site_version:-nothing}; republishing"
-    fi
+  # The store and the site both hold several packages, so they are compared by
+  # their package files: a name list is enough to notice a package that is
+  # missing on either side without mistaking one package for another.
+  store_set=$(store_package_names | sort | tr '\n' ' ')
+  site_set=''
+  db=$(mktemp) || die 'cannot create a temporary file'
+  if curl -fsSL --max-time 60 "$site_url/x86_64/$repo_name.db.tar.gz" -o "$db" 2>/dev/null; then
+    site_set=$(db_package_names "$db" | sort | tr '\n' ' ')
+  fi
+  rm -f "$db"
+  if [[ -n $store_set && $site_set != "$store_set" ]]; then
+    deploy=true
+    reason="the store holds [${store_set% }] while the site serves [${site_set% }]; republishing"
   fi
 fi
 

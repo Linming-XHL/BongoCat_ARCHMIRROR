@@ -57,24 +57,25 @@ store_packages() {
   done < <(store_assets | grep -E '\.pkg\.tar\.' || true)
 }
 
-# store_package_version <filename>: "bongocat-1.13.1-1-x86_64.pkg.tar.zst"
-# becomes "1.13.1-1"; fails for anything that does not look like a package.
+# store_package_version <filename>: "bongocat-x-bin-2.2.0-1-x86_64.pkg.tar.zst"
+# becomes "2.2.0-1". The package name is stripped from the left by matching
+# against the name this repository actually publishes, because every one of them
+# contains dashes ("bongocat-x-bin", "live2d-sdk-nonfree") and splitting on the
+# first dash would leave a fragment behind.
 store_package_version() {
   local name=$1 version
-  version=$(sed -E 's/^[^-]+-(.+)-\S+\.pkg\.tar\.[a-z]+$/\1/' <<<"$name")
-  [[ $version != "$name" ]] || return 1
+  version=$(sed -E -e 's/^.*-(x-bin|x-git|sdk-nonfree)-//' \
+                   -e 's/-x[0-9_]+\.pkg\.tar\.[a-z]+$//' <<<"$name")
+  [[ $version != "$name" && -n $version ]] || return 1
   printf '%s\n' "$version"
 }
 
-# store_latest_version: newest "pkgver-pkgrel" in the store, empty when unused.
-store_latest_version() {
-  local _ name version newest=''
-  while IFS=$'\t' read -r _ name version; do
-    if [[ -z $newest ]] || version_gt "$version" "$newest"; then
-      newest=$version
-    fi
+# store_package_names: the package names the store holds, one per line.
+store_package_names() {
+  local _ name _version
+  while IFS=$'\t' read -r _ name _version; do
+    printf '%s\n' "$name"
   done < <(store_packages)
-  printf '%s\n' "$newest"
 }
 
 store_asset_id() { # store_asset_id <name>

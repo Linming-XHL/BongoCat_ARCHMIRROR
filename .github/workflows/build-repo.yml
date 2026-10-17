@@ -1,9 +1,11 @@
 name: Arch repository
 
-# BongoCat is packaged from its upstream release sources and published as a
-# signed pacman repository on Cloudflare Pages. The pipeline polls upstream,
-# builds only when the version changed, and self heals a deployment that did not
-# make it to the edge.
+# BongoCat-X is published as a signed pacman repository on Cloudflare Pages: the
+# upstream release repackaged as bongocat-x-bin, plus the Live2D Core library as
+# live2d-sdk-nonfree. bongocat-x-git builds from upstream source on the user's
+# machine and is therefore not built here. The pipeline polls upstream, builds
+# only when the version changed, and self heals a deployment that did not make it
+# to the edge.
 
 on:
   schedule:
@@ -16,7 +18,7 @@ on:
         type: boolean
         default: false
       tag:
-        description: Upstream tag to package instead of the newest release (e.g. v1.13.1)
+        description: Upstream tag to package instead of the newest release (e.g. v2.2.2)
         type: string
         required: false
   repository_dispatch:
@@ -38,7 +40,10 @@ defaults:
     shell: bash
 
 env:
-  UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || 'vladelaina/BongoCat' }}
+  UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || 'TianMengLucky/BongoCat-X' }}
+  # The Pages project and the site domain are deployment identity, not package
+  # names: renaming either one would orphan a live repository, so both keep the
+  # values they were created with and stay overridable here.
   PAGES_PROJECT: ${{ vars.PAGES_PROJECT || 'bongocat-arch' }}
   STORE_TAG: ${{ vars.STORE_TAG || 'arch-repo-store' }}
   KEEP_VERSIONS: ${{ vars.KEEP_VERSIONS || '3' }}
@@ -107,6 +112,8 @@ jobs:
     timeout-minutes: 120
     container:
       image: archlinux:base-devel
+    outputs:
+      packages: ${{ steps.build.outputs.packages }}
     steps:
       # The image ships a stale keyring and no git, and actions/checkout needs
       # git, so this has to run before the repository is checked out.
@@ -121,28 +128,36 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      - name: Install the PKGBUILD's dependencies
+      - name: Install each published package's build dependencies
         run: |
           set -eux
           cd "$GITHUB_WORKSPACE"
-          [[ -f PKGBUILD ]] || { echo "::error::PKGBUILD is missing from $PWD"; ls -la; exit 1; }
-          # The leading ./ matters: without a slash the dot builtin looks the
-          # name up in PATH when the shell runs in POSIX mode.
-          source ./PKGBUILD
+          # repo.conf names the packages the pipeline builds, so adding a
+          # package is a matter of putting its PKGBUILD under packages/ and
+          # listing it there; nothing in this step is per-package.
+          source ./repo.conf
+          install_deps=()
+          for pkg in "${PUBLISHED_PACKAGES[@]}"; do
+            [[ -f packages/$pkg/PKGBUILD ]] || { echo "::error::$pkg has no PKGBUILD"; exit 1; }
+            # The leading ./ matters: without a slash the dot builtin looks the
+            # name up in PATH when the shell runs in POSIX mode.
+            ( source ./packages/$pkg/PKGBUILD
+              install_deps+=("${makedepends[@]}" "${depends[@]}" "${optdepends[@]}") )
+          done
           pacman -S --noconfirm --needed --disable-download-timeout \
-            "${makedepends[@]}" "${depends[@]}" gnupg curl jq zstd namcap
+            "${install_deps[@]}" gnupg curl jq zstd namcap
 
-      # Building the Live2D runtime means fetching the Cubism SDK and, through
-      # CMake, several pinned source archives. Reusing them keeps every build
-      # from pulling the same tens of megabytes again.
+      # live2d-sdk-nonfree unpacks the Cubism SDK, bongocat-x-bin reuses an
+      # upstream release archive. Reusing them keeps every build from
+      # downloading the same tens of megabytes again.
       - uses: actions/cache@v4
         with:
           path: |
-            ./*.zip
-            ./*.tar.gz
-          key: bongocat-sources-${{ hashFiles('PKGBUILD') }}
+            packages/*/*.zip
+            packages/*/*.tar.gz
+          key: bongocat-sources-${{ hashFiles('packages/*/PKGBUILD') }}
 
-      - name: Build and sign the package
+      - name: Build and sign the packages
         id: build
         env:
           VERSION: ${{ needs.detect.outputs.version }}
@@ -152,11 +167,9 @@ jobs:
         run: |
           set -euo pipefail
           : "${GPG_PRIVATE_KEY:?the GPG_PRIVATE_KEY secret is required}"
+          source ./repo.conf
 
-          args=(--version "$VERSION" --out "$GITHUB_WORKSPACE/dist")
-          [[ $BUMP == true ]] && args+=(--bump-pkgrel)
-
-          # makepkg refuses to run as root, so the build runs as builder. The
+          # makepkg refuses to run as root, so the builds run as builder. The
           # signing key travels through a file because su does not forward the
           # step's secrets to the other user.
           id -u builder >/dev/null 2>&1 || useradd -m -s /bin/bash builder
@@ -165,34 +178,50 @@ jobs:
           chmod 600 "$GITHUB_WORKSPACE/.gpg-key.asc" "$GITHUB_WORKSPACE/.gpg-passphrase"
           chown -R builder:builder "$GITHUB_WORKSPACE"
 
-          su builder -c "cd '$GITHUB_WORKSPACE' && HOME=/home/builder \
-            scripts/build-package.sh ${args[*]} \
-              --key-file '$GITHUB_WORKSPACE/.gpg-key.asc' \
-              --passphrase-file '$GITHUB_WORKSPACE/.gpg-passphrase'"
+          # Only the package that tracks upstream releases follows the detected
+          # version; the SDK package is pinned to its own upstream revision and
+          # is rebuilt whenever a release is published at all.
+          : >"$GITHUB_WORKSPACE/dist-info"
+          for pkg in "${PUBLISHED_PACKAGES[@]}"; do
+            args=(--out "$GITHUB_WORKSPACE/dist")
+            if [[ $pkg == $PRIMARY_PACKAGE ]]; then
+              args=(--version "$VERSION" "${args[@]}")
+              [[ $BUMP == true ]] && args+=(--bump-pkgrel)
+            else
+              args=(--bump-pkgrel "${args[@]}")
+            fi
+
+            su builder -c "cd '$GITHUB_WORKSPACE' && HOME=/home/builder \
+              scripts/build-package.sh $pkg ${args[*]} \
+                --key-file '$GITHUB_WORKSPACE/.gpg-key.asc' \
+                --passphrase-file '$GITHUB_WORKSPACE/.gpg-passphrase'"
+            cat "$GITHUB_WORKSPACE/dist/build-info.env" >>"$GITHUB_WORKSPACE/dist-info"
+          done
 
           rm -f "$GITHUB_WORKSPACE/.gpg-key.asc" "$GITHUB_WORKSPACE/.gpg-passphrase"
-          cat dist/build-info.env >>"$GITHUB_OUTPUT"
+          # Publish every package to the same place, so the names that the
+          # downstream steps report are the ones the pipeline actually built.
+          packages=$(grep -o '^pkgfile=.*' "$GITHUB_WORKSPACE/dist-info" | cut -d= -f2-)
+          {
+            echo "packages<<EOF"
+            printf '%s\n' "$packages"
+            echo EOF
+          } >>"$GITHUB_OUTPUT"
 
-      - name: Report the package
+      - name: Report the packages
         run: |
           set -euo pipefail
-          cat dist/build-info.env
-          pkgfile=$(sed -n 's/^pkgfile=//p' dist/build-info.env)
-          size=$(sed -n 's/^size=//p' dist/build-info.env)
-          sha=$(sed -n 's/^sha256=//p' dist/build-info.env)
           {
-            echo "### Package"
+            echo "### Packages"
             echo
             echo '```'
-            ls -la "dist/$pkgfile" "dist/$pkgfile.sig"
-            du -h "dist/$pkgfile"
+            grep -oE '^(pkgname|pkgfile|version|size|sha256)=.*' dist-info
             echo '```'
-            echo "- build: $((size / 1024)) KiB, sha256 \`$sha\`"
             echo
             echo "<details><summary>namcap (advisory)</summary>"
             echo
             echo '```'
-            namcap "dist/$pkgfile" || true
+            namcap dist/*.pkg.tar.zst || true
             echo '```'
             echo '</details>'
           } >>"$GITHUB_STEP_SUMMARY"
@@ -283,20 +312,22 @@ jobs:
           VERSION: ${{ needs.detect.outputs.version }}
           BUMP: ${{ needs.detect.outputs.bump }}
           BUILD: ${{ needs.detect.outputs.build }}
-          DEPLOYED_VERSION: ${{ steps.assemble.outputs.latest_version }}
         run: |
           set -euo pipefail
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          source ./repo.conf
 
           if [[ $BUILD == true ]]; then
-            args=("$VERSION")
+            # Only the package that tracks upstream releases moves with the
+            # detected version; the SDK package was bumped by the build itself.
+            args=("$PRIMARY_PACKAGE" "$VERSION")
             [[ $BUMP == true ]] && args+=(--bump-pkgrel)
           else
-            # Nothing was rebuilt, so take the version the repository serves.
-            [[ $DEPLOYED_VERSION == *-* ]] || { echo "no version to record ($DEPLOYED_VERSION)"; exit 0; }
-            args=("${DEPLOYED_VERSION%-*}" --pkgrel "${DEPLOYED_VERSION##*-}")
+            # Nothing was rebuilt, so the recorded version is already correct.
+            echo 'no build ran; the recorded versions are unchanged'
+            exit 0
           fi
 
           # makepkg regenerates .SRCINFO and refuses to run as root, so the bump
@@ -306,12 +337,14 @@ jobs:
           chown -R builder:builder "$GITHUB_WORKSPACE"
           su builder -c "cd '$GITHUB_WORKSPACE' && scripts/set-pkgver.sh ${args[*]}"
 
-          git add PKGBUILD .SRCINFO
+          # Every package directory is added, because the build bumped the SDK
+          # package's pkgrel too, whether or not this step moved it.
+          git add packages
           if git diff --cached --quiet; then
-            echo 'PKGBUILD already records this version'
+            echo 'the PKGBUILDs already record these versions'
             exit 0
           fi
-          git commit -m "chore: package bongocat ${args[0]}-$(sed -n 's/^pkgrel=//p' PKGBUILD) [skip ci]"
+          git commit -m "chore: package bongocat-x ${args[2]}-$(sed -n 's/^pkgrel=//p' packages/${args[0]}/PKGBUILD) [skip ci]"
           git push origin "HEAD:${{ github.ref_name }}"
 
       - name: Summarise the deployment

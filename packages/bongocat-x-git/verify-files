@@ -1,0 +1,19 @@
+# Paths every bongocat-x-git package must contain, one per line.
+# build-package.sh checks the built archive against this list.
+usr/bin/bongocat-x
+usr/lib/bongocat-x/BongoCat
+usr/lib/bongocat-x/plugins/libbongo_live2d.so
+usr/lib/bongocat-x/plugins/libbongo_inox2d.so
+usr/lib/bongocat-x/plugins/libbongo_stats.so
+usr/lib/bongocat-x/plugins/libbongo_items.so
+usr/lib/bongocat-x/plugins/libbongo_sounds.so
+usr/lib/bongocat-x/plugins/libbongo_store.so
+usr/lib/bongocat-x/licenses/Inox2D-LICENSE
+usr/lib/bongocat-x/assets/models/standard/cat.model3.json
+usr/lib/bongocat-x/assets/models/standard/demomodel.moc3
+usr/lib/bongocat-x/assets/models/standard/demomodel.1024/texture_00.png
+usr/lib/bongocat-x/assets/bongocat.png
+usr/lib/bongocat-x/assets/locales/en-US.json
+usr/share/applications/bongocat-x.desktop
+usr/share/icons/hicolor/512x512/apps/bongocat-x.png
+usr/share/licenses/bongocat-x-git/LICENSE

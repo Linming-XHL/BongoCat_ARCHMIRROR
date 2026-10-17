@@ -33,12 +33,25 @@ ci_append() {
   printf '%s\n' "$text" >>"$file"
 }
 
-# pkgbuild_field <field> [pkgbuild]: reads a plain assignment without executing
-# the rest of the PKGBUILD.
+# pkgbuild_field <field> <pkgbuild>: reads a plain assignment without executing
+# the rest of the PKGBUILD. The path is mandatory because this repository
+# publishes several packages and none of them is "the" package.
 pkgbuild_field() {
-  local field=$1 file=${2:-$REPO_ROOT/PKGBUILD}
+  local field=$1 file=${2:-}
+  [[ -n $file ]] || die "pkgbuild_field needs a PKGBUILD path for $field"
   [[ -f $file ]] || die "no such PKGBUILD: $file"
   sed -n "s/^${field}=\(.*\)\$/\1/p" "$file" | head -n1 | sed "s/^['\"]//; s/['\"]\$//"
+}
+
+# Every PKGBUILD this repository publishes, by package directory. packages/ is
+# the only place a package may live, so the CI matrix derives from it instead of
+# from a hand-kept list.
+package_dirs() {
+  find "$REPO_ROOT/packages" -mindepth 2 -maxdepth 2 -name PKGBUILD -printf '%h\n' 2>/dev/null | sort
+}
+
+package_name() { # package_name <package directory>
+  pkgbuild_field pkgname "$1/PKGBUILD"
 }
 
 # Fills GH_AUTH_ARGS with the authentication header for the GitHub API, if a
@@ -98,4 +111,9 @@ db_filenames() {
 # db_versions <database>: the versions a database advertises.
 db_versions() {
   db_descriptions "$1" | awk '/^%VERSION%$/ { getline; print }'
+}
+
+# db_package_names <database>: the package names a database advertises.
+db_package_names() {
+  db_descriptions "$1" | awk '/^%NAME%$/ { getline; print }'
 }

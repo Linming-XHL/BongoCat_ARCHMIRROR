@@ -1,0 +1,70 @@
+# Maintainer: Linming-XHL <linmingxhl@users.noreply.github.com>
+#
+# Ships the proprietary Live2D Cubism Core that BongoCat-X loads at runtime.
+# pacman cannot run anything at install time, so the Core library is extracted
+# from the official SDK archive while the package is built, the same way the
+# upstream release pipeline obtains it.
+
+pkgname=live2d-sdk-nonfree
+pkgver=5.0.5
+pkgrel=1
+pkgdesc='Live2D Cubism Core runtime library for BongoCat-X (proprietary, non-free)'
+arch=('x86_64')
+url='https://www.live2d.com/en/sdk/download/native/'
+license=('LicenseRef-Live2D-Proprietary')
+depends=()
+optdepends=(
+  'bongocat-x-bin: BongoCat-X repackaged from the upstream Linux release'
+  'bongocat-x-git: BongoCat-X built from the upstream development branch'
+)
+options=('!strip')
+
+# Upstream builds and tests against this exact Cubism release, and the Core ABI
+# is fixed by the SDK major version, so the SDK revision is pinned rather than
+# tracked: a new one may ship a different ABI and needs a deliberate bump.
+_cubism_ver='5-r.5'
+
+source=(
+  "CubismSdkForNative-$_cubism_ver.zip::https://cubism.live2d.com/sdk-native/bin/CubismSdkForNative-$_cubism_ver.zip"
+)
+# The vendor regenerates this archive, so its digest is not stable enough to
+# pin here; prepare() asserts the Core library the package ships really exists.
+sha256sums=('SKIP')
+noextract=("CubismSdkForNative-$_cubism_ver.zip")
+
+package() {
+  local work core_lib
+  work=$(mktemp -d) || return 1
+
+  bsdtar -xf "$srcdir/CubismSdkForNative-$_cubism_ver.zip" -C "$work" || return 1
+  core_lib=$(find "$work" -type f -name 'libLive2DCubismCore.so' -print -quit)
+  [[ -n $core_lib && -s $core_lib ]] || {
+    error "No libLive2DCubismCore.so in the Cubism SDK $_cubism_ver archive"; rm -rf "$work"; return 1; }
+
+  # BongoCat-X scans the directory of its own executable and the live2d/
+  # subdirectory below it, then its data directory, for either the bare Core
+  # library or an SDK zip (src/platform/posix/posix_live2d_sdk.c). Keeping the
+  # library in live2d/ leaves /usr/lib/bongocat-x/ free of proprietary code and
+  # survives a bongocat-x reinstall.
+  install -Dm755 "$core_lib" "$pkgdir/usr/lib/bongocat-x/live2d/libLive2DCubismCore.so"
+
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/licenses/$pkgname/LICENSE" <<'EOF'
+Live2D Cubism Core is proprietary software distributed by Live2D Inc. under the
+Live2D Proprietary Software License Agreement, available at
+
+  https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html
+
+Redistribution requires agreeing to that agreement. Download the SDK yourself
+from
+
+  https://www.live2d.com/en/sdk/download/native/
+
+The archive this package was built from is not redistributed here; only the Core
+shared library is unpacked from it at build time.
+EOF
+
+  rm -rf "$work"
+
+  [[ -s $pkgdir/usr/lib/bongocat-x/live2d/libLive2DCubismCore.so ]] || {
+    error 'The Core library is missing from the package'; return 1; }
+}

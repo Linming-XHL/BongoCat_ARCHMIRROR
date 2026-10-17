@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Adds the BongoCat pacman repository to this machine.
+# Adds the BongoCat-X pacman repository to this machine.
 #
 #   curl -fsSL __SITE_URL__/setup.sh | sudo bash
 #
@@ -63,7 +63,12 @@ cat <<EOF
 
 Done. The repository is configured, install the pet with:
 
-    sudo pacman -S $REPO_NAME
+    sudo pacman -S __PRIMARY_PACKAGE__
+
+The renderer is included, but the Live2D Cubism Core library is not, because
+Live2D licenses prohibit redistributing it. To enable Live2D rendering:
+
+    sudo pacman -S live2d-sdk-nonfree
 
 Keep the system updated with "sudo pacman -Syu" before installing: the packages
 are built on a rolling release, so they may expect slightly newer libraries than

@@ -1,0 +1,222 @@
+# Maintainer: Linming-XHL <linmingxhl@users.noreply.github.com>
+#
+# Builds BongoCat-X from the sources of the matching upstream release tag,
+# including its Live2D renderer. The Cubism Core runtime library is
+# proprietary and therefore not part of this package: install
+# live2d-sdk-nonfree next to it, or import the Core from the settings window.
+
+pkgname=bongocat-x-git
+pkgver=2.2.2.r0.g4579a0207
+pkgrel=1
+pkgdesc='Desktop pet that reacts to your keyboard and mouse input (Live2D on SDL3, built from upstream git)'
+arch=('x86_64')
+url='https://github.com/TianMengLucky/BongoCat-X'
+license=('AGPL-3.0-only')
+depends=('curl' 'fontconfig' 'gcc-libs' 'libglvnd' 'libx11' 'libxfixes' 'libxi' 'wayland')
+# rust is not optional: cmake/Rust.cmake turns the bongo-safe crate and the five
+# plugin crates into a hard requirement, and glslang compiles the Vulkan shaders
+# of the Cubism renderer.
+makedepends=('cmake' 'glslang' 'ninja' 'pkgconf' 'python' 'rust')
+optdepends=(
+  'alsa-lib: ALSA backend for motion sounds'
+  'pipewire-pulse: PulseAudio backend provided by PipeWire'
+  'pulseaudio: PulseAudio backend for motion sounds'
+  'noto-fonts-cjk: glyphs for the Chinese, Japanese and Korean interface'
+  'live2d-sdk-nonfree: Live2D Cubism Core, required for Live2D rendering'
+)
+conflicts=('bongocat' 'bongocat-bin' 'bongocat-git' 'bongocat-x' 'bongocat-x-bin')
+provides=('bongocat')
+# No split debug package: the Rust crates are already stripped by their own
+# release profile and makepkg's LTO would only slow the build down.
+options=('!debug' '!lto')
+
+# The Cubism SDK for Native and GLEW are downloaded from their official
+# distribution points at build time, exactly like the upstream release pipeline,
+# and are not redistributed by this PKGBUILD. The Cubism SDK is proprietary
+# software governed by the Live2D Proprietary Software License Agreement.
+_cubism_ver='5-r.5'
+_glew_ver='2.2.0'
+
+source=(
+  'bongocat-x::git+https://github.com/TianMengLucky/BongoCat-X.git'
+  "CubismSdkForNative-$_cubism_ver.zip::https://cubism.live2d.com/sdk-native/bin/CubismSdkForNative-$_cubism_ver.zip"
+  "glew-$_glew_ver.zip::https://github.com/nigels-com/glew/releases/download/glew-$_glew_ver/glew-$_glew_ver.zip"
+)
+sha256sums=('SKIP'
+            '7ff3a4bbc19c0a8728965aa522ab77eb11b252916453e68a8a78d3b71188bb12'
+            'a9046a913774395a095edcc0b0ac2d81c3aacca61787b39839b941e9be14e0d4')
+noextract=("CubismSdkForNative-$_cubism_ver.zip" "glew-$_glew_ver.zip")
+
+pkgver() {
+  cd bongocat-x
+  # Date and short commit, so two different trees never sort as equal.
+  printf '%s.r%s.g%s\n' \
+    "$(git describe --tags --always --match 'v[0-9]*' 2>/dev/null | sed 's/^v//')" \
+    "$(git rev-list --count HEAD 2>/dev/null || echo 0)" \
+    "$(git rev-parse --short=8 HEAD 2>/dev/null)"
+}
+
+# Shared by bongocat-x-git and the fixed-version package: both unpack the same
+# SDK into vendor/CubismSdkForNative before configuring.
+_install_cubism_sdk() {
+  local sdk_header glew_header sdk_root glew_root
+  rm -rf "$srcdir/cubism-sdk" "$srcdir/glew"
+  mkdir -p "$srcdir/cubism-sdk" "$srcdir/glew"
+  bsdtar -xf "$srcdir/CubismSdkForNative-$_cubism_ver.zip" -C "$srcdir/cubism-sdk" || return 1
+  bsdtar -xf "$srcdir/glew-$_glew_ver.zip" -C "$srcdir/glew" || return 1
+
+  # Locate the roots instead of trusting the archives' directory names.
+  sdk_header=$(find "$srcdir/cubism-sdk" -type f -path '*/Core/include/Live2DCubismCore.h' -print -quit)
+  [[ -n $sdk_header ]] || { error 'The Cubism SDK archive has no Core/include tree'; return 1; }
+  sdk_root=${sdk_header%/Core/include/Live2DCubismCore.h}
+
+  glew_header=$(find "$srcdir/glew" -type f -path '*/include/GL/glew.h' -print -quit)
+  [[ -n $glew_header ]] || { error 'The GLEW archive has no include/GL tree'; return 1; }
+  glew_root=${glew_header%/include/GL/glew.h}
+
+  # cmake/Cubism.cmake wants the SDK at vendor/CubismSdkForNative with GLEW
+  # vendored under Samples/OpenGL/thirdParty/glew.
+  rm -rf vendor/CubismSdkForNative
+  mkdir -p vendor/CubismSdkForNative
+  cp -a "$sdk_root/." vendor/CubismSdkForNative/
+  mkdir -p vendor/CubismSdkForNative/Samples/OpenGL/thirdParty/glew
+  cp -a "$glew_root/." vendor/CubismSdkForNative/Samples/OpenGL/thirdParty/glew/
+
+  local rel
+  for rel in Core/include/Live2DCubismCore.h Framework/CMakeLists.txt \
+      Framework/src/Rendering/Vulkan/CubismRenderer_Vulkan.hpp \
+      Samples/OpenGL/thirdParty/glew/src/glew.c; do
+    [[ -e vendor/CubismSdkForNative/$rel ]] || {
+      error "Incomplete Cubism SDK: vendor/CubismSdkForNative/$rel is missing"; return 1; }
+  done
+}
+
+prepare() {
+  cd bongocat-x
+  _install_cubism_sdk
+}
+
+build() {
+  cd bongocat-x
+
+  # The same options the upstream release pipeline builds with, so the package
+  # behaves like the official Linux archives: the Live2D renderer is required
+  # (a missing SDK must fail instead of falling back to the diagnostic backend),
+  # the Cubism Vulkan backend is on, and release size is optimised.
+  # BONGO_CAT_WARNINGS_AS_ERRORS stays off: the rolling compilers in an Arch
+  # build container report warnings that the upstream CI compiler does not.
+  cmake -S . -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_TESTING=OFF \
+    -DBONGO_CAT_FETCH_DEPS=ON \
+    -DBONGO_CAT_REQUIRE_CUBISM=ON \
+    -DBONGO_CAT_CUBISM_VULKAN=ON \
+    -DBONGO_CAT_WARNINGS_AS_ERRORS=OFF
+  cmake --build build --parallel "$(nproc)"
+}
+
+# Structural checks run at the end of package() on purpose: makepkg calls
+# check() before package(), where $pkgdir does not exist yet. The runtime
+# resolves its assets and plugins next to the executable through
+# SDL_GetBasePath(), so the layout is load bearing, and ldd proves the declared
+# depends are complete, which is what catches a new upstream commit that pulls
+# in another shared library.
+package() {
+  cd bongocat-x
+
+  # Upstream installs the executable, assets/ and plugins/ side by side; the
+  # runtime resolves them through SDL_GetBasePath(), which follows
+  # /proc/self/exe, so the symlink keeps /usr/bin clean without breaking it.
+  cmake --install build --component Runtime --prefix "$pkgdir/usr/lib/bongocat-x"
+  install -d "$pkgdir/usr/bin"
+  ln -s /usr/lib/bongocat-x/BongoCat "$pkgdir/usr/bin/bongocat-x"
+
+  # The empty drop-in directory the app creates on first start anyway; shipping
+  # it makes live2d-sdk-nonfree's copy into it work before the first run.
+  install -d "$pkgdir/usr/lib/bongocat-x/live2d"
+
+  install -Dm644 packaging/linux/bongocat.desktop \
+    "$pkgdir/usr/share/applications/bongocat-x.desktop"
+  # The upstream desktop file runs the binary out of its own directory and names
+  # the icon bongocat; the installed icon is renamed, so Icon has to follow.
+  sed -i -e 's/^Exec=BongoCat$/Exec=bongocat-x/' \
+         -e 's/^Icon=.*/Icon=bongocat-x/' \
+    "$pkgdir/usr/share/applications/bongocat-x.desktop"
+  install -Dm644 resources/assets/bongocat.png \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/bongocat-x.png"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+  install -Dm644 resources/assets/models/LICENSE \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE-models"
+
+  _verify_layout
+}
+
+_verify_layout() {
+  local libdir="$pkgdir/usr/lib/bongocat-x"
+  [[ -x $libdir/BongoCat ]] || { error 'Missing /usr/lib/bongocat-x/BongoCat'; return 1; }
+  # A build without the SDK falls back to the diagnostic backend and ships this
+  # notice; seeing it means the Live2D renderer was not compiled in.
+  [[ ! -e $libdir/DiagnosticBuildNotice.txt ]] || {
+    error 'The diagnostic backend was built instead of the Live2D renderer'; return 1; }
+
+  # cmake/ModelPlugins.cmake stages the targets named bongo_inox2d-shared and
+  # friends, but Corrosion's cdylib artefacts keep the plain crate name; these
+  # are the names upstream's own release check looks for.
+  local plugin
+  for plugin in libbongo_live2d.so libbongo_inox2d.so libbongo_stats.so \
+      libbongo_items.so libbongo_sounds.so libbongo_store.so; do
+    [[ -s $libdir/plugins/$plugin ]] || { error "Missing plugin: plugins/$plugin"; return 1; }
+  done
+
+  # BSD terms travel with the dynamically installed Inox2D renderer.
+  [[ -s $libdir/licenses/Inox2D-LICENSE ]] || {
+    error 'Missing licenses/Inox2D-LICENSE'; return 1; }
+
+  local asset
+  for asset in bongocat.png ui-symbols.png ui-symbols@4x.png locales/en-US.json \
+      models/standard/cat.model3.json models/standard/demomodel.moc3 \
+      models/standard/demomodel.1024/texture_00.png; do
+    [[ -s $libdir/assets/$asset ]] || { error "Missing asset: assets/$asset"; return 1; }
+  done
+
+  # The Core library is proprietary and must never end up inside this package;
+  # it is loaded at runtime from live2d/ by live2d-sdk-nonfree instead.
+  [[ ! -e $libdir/live2d/libLive2DCubismCore.so ]] || {
+    error 'The proprietary Cubism Core leaked into the package'; return 1; }
+
+  local file
+  for file in "$libdir/BongoCat" "$libdir"/plugins/*.so; do
+    local unresolved
+    unresolved=$(LC_ALL=C ldd "$file" 2>/dev/null | grep 'not found' || true)
+    [[ -z $unresolved ]] || {
+      error "Unresolved shared libraries in ${file#$pkgdir}:\n$unresolved"; return 1; }
+  done
+
+  # Every directly needed soname must be provided by a package in depends.
+  # LC_ALL=C keeps the readelf/ldd output parseable in any locale.
+  local -a sonames
+  mapfile -t sonames < <(LC_ALL=C readelf -d "$libdir/BongoCat" \
+    | awk '/NEEDED/ { if (match($0, /\[[^]]+\]/)) print substr($0, RSTART + 1, RLENGTH - 2) }')
+  (( ${#sonames[@]} )) || { error 'Cannot read the shared library list of the executable'; return 1; }
+
+  local soname path owner expected missing=()
+  for soname in "${sonames[@]}"; do
+    path=$(ldconfig -p | awk -v soname="$soname" '$1 == soname { print $NF; exit }')
+    owner=$(pacman -Qoq "$path" 2>/dev/null | head -n1)
+    # The C and C++ runtime libraries have more than one provider (some systems
+    # split libstdc++/libgcc out of gcc-libs), so map them by name instead of by
+    # whichever package happens to own the file.
+    case $soname in
+      libc.so.6 | libm.so.6 | libpthread.so.0 | libdl.so.2) continue ;;  # glibc, always present
+      libstdc++.so.6 | libgcc_s.so.1) expected=gcc-libs ;;
+      *) expected=$owner ;;
+    esac
+    if [[ -z $expected || " ${depends[*]} " != *" $expected "* ]]; then
+      missing+=("$soname (provided by ${owner:-nothing})")
+    fi
+  done
+  (( ${#missing[@]} == 0 )) || {
+    error "Undefined depends entries for: ${missing[*]}"; return 1; }
+}

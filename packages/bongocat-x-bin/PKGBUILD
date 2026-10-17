@@ -1,0 +1,142 @@
+# Maintainer: Linming-XHL <linmingxhl@users.noreply.github.com>
+#
+# Repackages the official Linux release archive of BongoCat-X instead of
+# compiling it, so this package installs in seconds and stays byte-identical to
+# what upstream ships. It carries the same runtime-core design: the Live2D
+# renderer is included, the proprietary Cubism Core is not. Install
+# live2d-sdk-nonfree to enable Live2D.
+
+pkgname=bongocat-x-bin
+pkgver=2.2.0
+pkgrel=1
+pkgdesc='Desktop pet that reacts to your keyboard and mouse input (Live2D on SDL3, upstream binary)'
+arch=('x86_64')
+url='https://github.com/TianMengLucky/BongoCat-X'
+license=('AGPL-3.0-only')
+# The release is self-contained: it statically links SDL3 and Rust crates and
+# only needs the shared libraries listed here.
+depends=('alsa-lib' 'curl' 'fontconfig' 'gcc-libs' 'libglvnd' 'libx11' 'libxcb' 'libxfixes' 'libxi' 'wayland')
+optdepends=(
+  'pipewire-pulse: PulseAudio backend provided by PipeWire'
+  'pulseaudio: PulseAudio backend for motion sounds'
+  'noto-fonts-cjk: glyphs for the Chinese, Japanese and Korean interface'
+  'live2d-sdk-nonfree: Live2D Cubism Core, required for Live2D rendering'
+)
+conflicts=('bongocat' 'bongocat-bin' 'bongocat-git' 'bongocat-x' 'bongocat-x-git')
+provides=('bongocat')
+options=('!strip' '!debug' '!lto')
+
+_pkgarch=x64
+source=("BongoCat-X-$pkgver-linux-$_pkgarch.tar.gz::https://github.com/TianMengLucky/BongoCat-X/releases/download/v$pkgver/BongoCat-X-$pkgver-linux-$_pkgarch.tar.gz")
+# Upstream publishes a .sha256 next to every archive; this digest is GitHub's own
+# for the asset at the pinned version. The build re-verifies it against the
+# published sidecar, so an upstream re-upload is caught instead of trusted.
+sha256sums=('6eafd01b8f62bb9ccc28b00658794487c0efd85361a4e6dc54548f99058f9ede')
+noextract=()
+
+# No pkgver() on purpose: sha256sums pins one exact archive, so a self-updating
+# pkgver() would only make makepkg look for a source whose checksum is not in the
+# file. The source line interpolates $pkgver, so set-pkgver.sh moving pkgver moves
+# the URL too, and the pipeline is what follows upstream releases.
+
+package() {
+  local archive="$srcdir/BongoCat-X-$pkgver-linux-$_pkgarch.tar.gz" work root
+
+  # Trust the checksum upstream publishes next to the archive rather than the
+  # pinned one alone: makepkg already verified the pin above, and a mismatch here
+  # means upstream replaced the asset, so the pin has to be revisited.
+  local published
+  published=$(curl -fsSL "https://github.com/TianMengLucky/BongoCat-X/releases/download/v$pkgver/BongoCat-X-$pkgver-linux-$_pkgarch.tar.gz.sha256" \
+    | grep -oiE '[0-9a-f]{64}' | head -n1)
+  [[ -n $published ]] || { error 'Upstream publishes no checksum for the release archive'; return 1; }
+  [[ $published == "${sha256sums[0]}" ]] || {
+    error "Upstream checksum $published differs from the pinned ${sha256sums[0]}"; return 1; }
+
+  work=$(mktemp -d) || return 1
+  bsdtar -xf "$archive" -C "$work" || return 1
+  root=$(find "$work" -maxdepth 2 -type d -name 'BongoCat-X-*-linux-x64' -print -quit)
+  [[ -n $root ]] || { error 'The release archive has no BongoCat-X-*-linux-x64 directory'; rm -rf "$work"; return 1; }
+
+  install -d "$pkgdir/usr/lib/bongocat-x"
+  cp -a "$root/." "$pkgdir/usr/lib/bongocat-x/"
+
+  install -d "$pkgdir/usr/bin"
+  ln -s /usr/lib/bongocat-x/BongoCat "$pkgdir/usr/bin/bongocat-x"
+
+  # The app creates this itself on first start; shipping it makes
+  # live2d-sdk-nonfree work before the first run.
+  install -d "$pkgdir/usr/lib/bongocat-x/live2d"
+
+  # The upstream desktop file starts the binary from its own directory.
+  local desktop="$root/bongocat.desktop"
+  if [[ -f $desktop ]]; then
+    install -Dm644 "$desktop" "$pkgdir/usr/share/applications/bongocat-x.desktop"
+  else
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/bongocat-x.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=BongoCat-X
+Comment=An animated desktop cat that reacts to your input
+Exec=bongocat-x
+Icon=bongocat-x
+Categories=Utility;
+Terminal=false
+EOF
+  fi
+  # The installed icon is renamed to bongocat-x, so Icon has to follow, and
+  # Exec has to run the one on PATH rather than a path inside the install dir.
+  sed -i -e 's/^Exec=.*/Exec=bongocat-x/' -e 's/^Icon=.*/Icon=bongocat-x/' \
+    "$pkgdir/usr/share/applications/bongocat-x.desktop"
+  install -Dm644 "$root/assets/bongocat.png" \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/bongocat-x.png"
+
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/licenses/$pkgname/LICENSE" <<'EOF'
+BongoCat-X is licensed under AGPL-3.0-only; see
+https://github.com/TianMengLucky/BongoCat-X/blob/dev/LICENSE
+
+The bundled model assets in resources/assets/models (standard, keyboard,
+gamepad) are covered by a separate MIT license; see
+https://github.com/TianMengLucky/BongoCat-X/blob/dev/LICENSE-MIT
+EOF
+
+  rm -rf "$work"
+
+  _verify_layout
+}
+
+_verify_layout() {
+  local libdir="$pkgdir/usr/lib/bongocat-x"
+  [[ -x $libdir/BongoCat ]] || { error 'Missing /usr/lib/bongocat-x/BongoCat'; return 1; }
+
+  local plugin
+  for plugin in libbongo_live2d.so libbongo_inox2d.so libbongo_stats.so \
+      libbongo_items.so libbongo_sounds.so libbongo_store.so; do
+    [[ -s $libdir/plugins/$plugin ]] || { error "Missing plugin: plugins/$plugin"; return 1; }
+  done
+
+  [[ -s $libdir/licenses/Inox2D-LICENSE ]] || {
+    error 'Missing licenses/Inox2D-LICENSE'; return 1; }
+
+  local asset
+  for asset in bongocat.png locales/en-US.json models/standard/cat.model3.json \
+      models/standard/demomodel.moc3; do
+    [[ -s $libdir/assets/$asset ]] || { error "Missing asset: assets/$asset"; return 1; }
+  done
+
+  # Upstream's own packaging check asserts the Core binary never ships; so does
+  # this one, since it is the whole reason live2d-sdk-nonfree exists.
+  [[ ! -e $libdir/live2d/libLive2DCubismCore.so ]] || {
+    error 'The proprietary Cubism Core leaked into the package'; return 1; }
+
+  # The archive is built on Ubuntu, so the loader and every library it names
+  # have to resolve on Arch too; this is what catches a glibc or library set
+  # that upstream's own release check does not cover for this distribution.
+  local file
+  for file in "$libdir/BongoCat" "$libdir"/plugins/*.so; do
+    [[ -e $file ]] || continue
+    local unresolved
+    unresolved=$(LC_ALL=C ldd "$file" 2>/dev/null | grep 'not found' || true)
+    [[ -z $unresolved ]] || {
+      error "Unresolved shared libraries in ${file#$pkgdir}:\n$unresolved"; return 1; }
+  done
+}

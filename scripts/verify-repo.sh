@@ -3,24 +3,22 @@
 # Checks a generated deployment tree the way a client would.
 #
 # With root rights it builds a throwaway pacman configuration and keyring,
-# syncs the repository and downloads the package, so the database and package
+# syncs the repository and downloads every package, so the database and package
 # signatures are verified by pacman itself. Without root it still verifies both
 # signatures with GnuPG and reports what it skipped.
 #
-# Usage: verify-repo.sh [--dir public] [--repo-name NAME] [--pkgname NAME]
+# Usage: verify-repo.sh [--dir public] [--repo-name NAME]
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 dir=$REPO_ROOT/public
 repo_name=''
-pkgname=''
 
 while (( $# )); do
   case $1 in
     --dir)       dir=$2; shift 2 ;;
     --repo-name) repo_name=$2; shift 2 ;;
-    --pkgname)   pkgname=$2; shift 2 ;;
-    -h|--help)   sed -n '2,10p' "$0"; exit 0 ;;
+    -h|--help)   sed -n '2,9p' "$0"; exit 0 ;;
     *)           die "unknown argument: $1" ;;
   esac
 done
@@ -30,10 +28,16 @@ require_cmd gpg sha256sum
 # The pacman configuration below uses a file:// server, and such a URL has to be
 # absolute; a relative --dir would otherwise fail with "Bad file:// URL".
 dir=$(cd "$dir" && pwd)
-repo_name=${repo_name:-$(pkgbuild_field pkgname)}
-pkgname=${pkgname:-$repo_name}
-arch=$(pkgbuild_field arch)
-[[ $arch == *x86_64* ]] && arch=x86_64
+# The repository name comes from repo.conf, because the repository holds several
+# packages and no PKGBUILD stands in for it. An explicit --repo-name still wins,
+# so a dry run can verify a tree built under another name.
+if [[ -z $repo_name ]]; then
+  [[ -f $REPO_ROOT/repo.conf ]] || die 'repo.conf is missing: it names the repository'
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/repo.conf"
+  [[ -n $repo_name ]] || die 'repo.conf does not set repo_name'
+fi
+arch=x86_64
 
 repo_dir="$dir/$arch"
 database="$repo_dir/$repo_name.db.tar.gz"
@@ -104,13 +108,18 @@ trap cleanup_pacman EXIT
 
 log 'syncing the repository with a throwaway pacman configuration'
 pacman -Sy --config "$work/pacman.conf" --noconfirm || die 'pacman could not sync the repository'
-pacman -Si "$pkgname" --config "$work/pacman.conf" >/dev/null \
-  || die "the synced database does not describe $pkgname"
 
 # -dd keeps dependency resolution out of a machine that is not the build host;
 # the download still verifies the package signature, which is the point here.
-log 'downloading the package through pacman to check its signature'
-pacman -Sddw "$pkgname" --config "$work/pacman.conf" --noconfirm \
-  || die 'pacman refused the package: signature or metadata problem'
+# Every package is downloaded, because the repository holds more than one.
+mapfile -t synced < <(db_descriptions "$database" | awk '/^%NAME%$/ { getline; print }' | sort -u)
+(( ${#synced[@]} )) || die 'the database names no package'
+(( ${#synced[@]} == 1 )) || log "checking ${#synced[@]} packages: ${synced[*]}"
+for name in "${synced[@]}"; do
+  pacman -Si "$name" --config "$work/pacman.conf" >/dev/null \
+    || die "the synced database does not describe $name"
+  pacman -Sddw "$name" --config "$work/pacman.conf" --noconfirm \
+    || die "pacman refused $name: signature or metadata problem"
+done
 
-log 'pacman synced the repository, read the metadata and verified the package signature'
+log "pacman synced the repository, read the metadata and verified ${#synced[@]} package signature(s)"
