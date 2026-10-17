@@ -113,6 +113,8 @@ gpg --batch --verify "$sigfile" "$pkgfile" >/dev/null 2>&1 \
 install -d "$out_dir"
 install -m 644 "$pkgfile" "$out_dir/"
 install -m 644 "$sigfile" "$out_dir/"
+[[ -f $out_dir/$(basename "$sigfile") ]] \
+  || die "the signature for $(basename "$pkgfile") did not land in $out_dir"
 pkgfile="$out_dir/$(basename "$pkgfile")"
 sigfile="$pkgfile.sig"
 
