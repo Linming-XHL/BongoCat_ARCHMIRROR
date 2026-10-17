@@ -165,19 +165,38 @@ done
 
 render() { # render <source> <destination>
   local src=$1 dst=$2
-  sed -e "s|__SITE_URL__|$(sed_escape "$site_url")|g" \
-      -e "s|__REPO_NAME__|$(sed_escape "$repo_name")|g" \
-      -e "s|__PRIMARY_PACKAGE__|$(sed_escape "$primary_package")|g" \
-      -e "s|__KEY_ID__|$(sed_escape "$key_id")|g" \
-      -e "s|__FINGERPRINT_COMPACT__|$(sed_escape "$fingerprint")|g" \
-      -e "s|__FINGERPRINT__|$(sed_escape "$(format_fingerprint "$fingerprint")")|g" \
-      -e "s|__LATEST_VERSION__|$(sed_escape "$latest")|g" \
-      -e "s|__UPDATED__|$(date -u '+%Y-%m-%d %H:%M UTC')|g" \
-      -e "s|__PACKAGES__|$(sed_escape "$packages_html")|g" \
-      "$src" >"$dst"
+  # Rendered with awk instead of sed: the packages table spans several lines,
+  # and a real newline inside a sed s-command ends the command. Values travel
+  # in through ENVIRON without escape processing; the only awk replacement
+  # metacharacter, "&", is turned into "\&" by escape_replacement().
+  PACKAGES_HTML=$(escape_replacement "$packages_html") \
+  SITE_URL_VALUE=$(escape_replacement "$site_url") \
+  REPO_NAME_VALUE=$(escape_replacement "$repo_name") \
+  PRIMARY_PACKAGE_VALUE=$(escape_replacement "$primary_package") \
+  KEY_ID_VALUE=$(escape_replacement "$key_id") \
+  FINGERPRINT_VALUE=$(escape_replacement "$fingerprint") \
+  FORMATTED_VALUE=$(escape_replacement "$(format_fingerprint "$fingerprint")") \
+  LATEST_VALUE=$(escape_replacement "$latest") \
+  UPDATED_VALUE=$(escape_replacement "$(date -u '+%Y-%m-%d %H:%M UTC')") \
+  awk '
+    {
+      gsub(/__SITE_URL__/, ENVIRON["SITE_URL_VALUE"])
+      gsub(/__REPO_NAME__/, ENVIRON["REPO_NAME_VALUE"])
+      gsub(/__PRIMARY_PACKAGE__/, ENVIRON["PRIMARY_PACKAGE_VALUE"])
+      gsub(/__KEY_ID__/, ENVIRON["KEY_ID_VALUE"])
+      gsub(/__FINGERPRINT_COMPACT__/, ENVIRON["FINGERPRINT_VALUE"])
+      gsub(/__FINGERPRINT__/, ENVIRON["FORMATTED_VALUE"])
+      gsub(/__LATEST_VERSION__/, ENVIRON["LATEST_VALUE"])
+      gsub(/__UPDATED__/, ENVIRON["UPDATED_VALUE"])
+      gsub(/__PACKAGES__/, ENVIRON["PACKAGES_HTML"])
+      print
+    }' "$src" >"$dst"
 }
 
-sed_escape() { printf '%s' "$1" | sed -e 's/[&\\|]/\\&/g'; }
+# A gsub replacement treats a bare "&" as the whole match. A backslash needs no
+# attention: apart from a "\&" pair it passes through unchanged, in gawk as in
+# mawk.
+escape_replacement() { printf '%s' "$1" | sed -e 's/&/\\&/g'; }
 
 format_fingerprint() {
   printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | fold -w4 | paste -sd' ' -
