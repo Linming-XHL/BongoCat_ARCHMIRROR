@@ -157,10 +157,11 @@ jobs:
             install_deps+=("${makedepends[@]}" "${depends[@]}")
           done
           # sort -u keeps a dependency named by several packages from being
-          # passed twice, which --needed tolerates but makes the log unreadable.
+          # passed twice, and mapfile turns the lines back into arguments: a
+          # quoted "$(...)" would hand pacman the whole list as one target name.
+          mapfile -t install_deps < <(printf '%s\n' "${install_deps[@]}" | sort -u)
           pacman -S --noconfirm --needed --disable-download-timeout \
-            "$(printf '%s\n' "${install_deps[@]}" | sort -u | tr '\n' ' ')" \
-            gnupg curl jq zstd namcap
+            "${install_deps[@]}" gnupg curl jq zstd namcap
 
       # live2d-sdk-nonfree unpacks the Cubism SDK, bongocat-x-bin reuses an
       # upstream release archive. Reusing them keeps every build from
