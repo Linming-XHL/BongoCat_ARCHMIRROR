@@ -163,6 +163,21 @@ for file in "${!entry_file[@]}"; do
     '. + [{name: $n, version: $v, filename: $f, size: $s, sha256: $sha}]' <<<"$packages_json")
 done
 
+# ---- the Server lines clients configure ------------------------------------
+# pacman tries the Server lines of a repository section in order and moves on
+# to the next one on any failure, so the proxies come first (they are the ones
+# that help in a GFW-limited network) and the project site is last, as the base
+# that cannot be blocked by anything upstream of it.
+target_repo=${STORE_TARGET_REPO:-$GITHUB_REPOSITORY}
+[[ -n $target_repo ]] || target_repo=$STORE_REPO
+[[ -n $target_repo ]] || die 'no target repository for the mirrors (set STORE_TARGET_REPO or run with GITHUB_REPOSITORY/STORE_REPO)'
+store_tag=${STORE_TAG:-arch-repo-store}
+mirror_servers=''
+for proxy in ${MIRROR_PROXIES[@]+"${MIRROR_PROXIES[@]}"}; do
+  mirror_servers+="Server = ${proxy%/}/https://github.com/$target_repo/releases/download/$store_tag/\$arch"$'\n'
+done
+mirror_servers+="Server = $site_url/\$arch"
+
 render() { # render <source> <destination>
   local src=$1 dst=$2
   # Rendered with awk instead of sed: the packages table spans several lines,
@@ -178,6 +193,7 @@ render() { # render <source> <destination>
   FORMATTED_VALUE=$(escape_replacement "$(format_fingerprint "$fingerprint")") \
   LATEST_VALUE=$(escape_replacement "$latest") \
   UPDATED_VALUE=$(escape_replacement "$(date -u '+%Y-%m-%d %H:%M UTC')") \
+  MIRROR_SERVERS_VALUE=$(escape_replacement "$mirror_servers") \
   awk '
     {
       gsub(/__SITE_URL__/, ENVIRON["SITE_URL_VALUE"])
@@ -188,6 +204,7 @@ render() { # render <source> <destination>
       gsub(/__FINGERPRINT__/, ENVIRON["FORMATTED_VALUE"])
       gsub(/__LATEST_VERSION__/, ENVIRON["LATEST_VALUE"])
       gsub(/__UPDATED__/, ENVIRON["UPDATED_VALUE"])
+      gsub(/__MIRROR_SERVERS__/, ENVIRON["MIRROR_SERVERS_VALUE"])
       gsub(/__PACKAGES__/, ENVIRON["PACKAGES_HTML"])
       print
     }' "$src" >"$dst"
@@ -207,6 +224,21 @@ render "$REPO_ROOT/repo-site/_headers" "$out_dir/_headers"
 render "$REPO_ROOT/repo-site/setup.sh" "$out_dir/setup.sh"
 chmod 755 "$out_dir/setup.sh"
 jq '.' <<<"$packages_json" >"$out_dir/packages.json"
+
+# ---- mirror support ---------------------------------------------------------
+# The mirrors proxy GitHub release download URLs, so everything a mirror must
+# serve — the database, its signature and the public key — has to live in the
+# store release alongside the packages. The Pages site already has these; this
+# makes the store self-sufficient for the mirror Server lines.
+if [[ -n $STORE_REPO && -z $from_dir ]]; then
+  log 'uploading the database and key to the release store for the mirrors'
+  "$REPO_ROOT/scripts/publish-store.sh" \
+    --store-repo "$STORE_REPO" --store-tag "${STORE_TAG:-arch-repo-store}" --dir "$out_dir" \
+    "$out_dir/x86_64/$repo_name.db.tar.gz" \
+    "$out_dir/x86_64/$repo_name.db.tar.gz.sig" \
+    "$out_dir/$repo_name-repo.asc" \
+    || die 'cannot publish the repository base files to the store'
+fi
 
 if grep -rl '__[A-Z_]*__' "$out_dir" >/dev/null 2>&1; then
   warn "unrendered placeholders remain in: $(grep -rl '__[A-Z_]*__' "$out_dir" | tr '\n' ' ')"

@@ -65,10 +65,11 @@ sudo pacman -S __PRIMARY_PACKAGE__</pre>
   <code>sudo pacman -S live2d-sdk-nonfree</code>.</p>
 
   <h2>Or configure it by hand</h2>
-  <p>Add this to <code>/etc/pacman.conf</code>:</p>
+  <p>Add this to <code>/etc/pacman.conf</code>. The mirror lines come first and
+  fail over in order; the project server is the last fallback:</p>
 <pre> [__REPO_NAME__]
  SigLevel = Required DatabaseOptional
- Server = __SITE_URL__/$arch</pre>
+__MIRROR_SERVERS__</pre>
   <p>Then import and locally sign the repository key:</p>
 <pre>curl -fsSLO __SITE_URL__/__REPO_NAME__-repo.asc
 sudo pacman-key --add __REPO_NAME__-repo.asc

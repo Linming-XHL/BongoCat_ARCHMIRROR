@@ -52,7 +52,7 @@ else
 
 [$REPO_NAME]
 SigLevel = Required DatabaseOptional
-Server = $SITE_URL/\$arch
+__MIRROR_SERVERS__
 EOF
 fi
 
