@@ -7,7 +7,7 @@
 
 pkgname=live2d-sdk-nonfree
 pkgver=5.0.5
-pkgrel=1
+pkgrel=2
 pkgdesc='Live2D Cubism Core runtime library for BongoCat-X (proprietary, non-free)'
 arch=('x86_64')
 url='https://www.live2d.com/en/sdk/download/native/'
@@ -37,9 +37,15 @@ package() {
   work=$(mktemp -d) || return 1
 
   bsdtar -xf "$srcdir/CubismSdkForNative-$_cubism_ver.zip" -C "$work" || return 1
-  core_lib=$(find "$work" -type f -name 'libLive2DCubismCore.so' -print -quit)
+
+  # The SDK zip carries a Core library for every platform it supports, and
+  # "find -name libLive2DCubismCore.so" picks whichever entry the archive lists
+  # first — on 5-r.5 that is the HarmonyOS build, which dlopen rejects with
+  # "invalid ELF header" (it needs libc.so, not libc.so.6). Core's own
+  # RedistributableFiles.txt names the Linux x86_64 one, so that path is taken.
+  core_lib=$(find "$work" -type f -path '*/dll/linux/x86_64/libLive2DCubismCore.so' -print -quit)
   [[ -n $core_lib && -s $core_lib ]] || {
-    error "No libLive2DCubismCore.so in the Cubism SDK $_cubism_ver archive"; rm -rf "$work"; return 1; }
+    error "No libLive2DCubismCore.so for Linux x86_64 in the Cubism SDK $_cubism_ver archive"; rm -rf "$work"; return 1; }
 
   # BongoCat-X scans the directory of its own executable and the live2d/
   # subdirectory below it, then its data directory, for either the bare Core
@@ -47,6 +53,12 @@ package() {
   # library in live2d/ leaves /usr/lib/bongocat-x/ free of proprietary code and
   # survives a bongocat-x reinstall.
   install -Dm755 "$core_lib" "$pkgdir/usr/lib/bongocat-x/live2d/libLive2DCubismCore.so"
+
+  # The wrong-platform Core is a valid ELF and loads far enough to fail at
+  # dlopen, so the shared-library dependency is what tells the two apart.
+  readelf -d "$pkgdir/usr/lib/bongocat-x/live2d/libLive2DCubismCore.so" 2>/dev/null \
+    | grep -q 'libc.so.6' || {
+    error 'The packaged Core does not link libc.so.6, so it is not the Linux build'; return 1; }
 
   install -Dm644 /dev/stdin "$pkgdir/usr/share/licenses/$pkgname/LICENSE" <<'EOF'
 Live2D Cubism Core is proprietary software distributed by Live2D Inc. under the
