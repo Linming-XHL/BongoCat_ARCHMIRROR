@@ -57,9 +57,10 @@ full_version="$pkgver-$pkgrel"
 gpg_import_key
 
 log "building $pkgname $full_version"
-# makepkg records the packager in .PKGINFO and falls back to a placeholder when
-# the environment says nothing about it, which is the case on CI runners.
-export PACKAGER=${PACKAGER:-"${GITHUB_REPOSITORY:-BongoCat-X arch repository} (automated build)"}
+# makepkg records the packager in .PKGINFO and warns unless PACKAGER ends in
+# "<email>" with nothing after the bracket: pacman parses that address for a WKD
+# key lookup. The default is what CI has to offer; a local build exports its own.
+export PACKAGER=${PACKAGER:-"BongoCat-X arch repository <noreply@github.com>"}
 # The dependencies are expected to be installed already (the workflow installs
 # the PKGBUILD's makedepends and depends up front), so makepkg needs no sudo.
 ( cd "$pkgdir" && makepkg --noconfirm --force --clean --noprogressbar )

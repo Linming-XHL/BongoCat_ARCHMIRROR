@@ -136,16 +136,31 @@ jobs:
           # package is a matter of putting its PKGBUILD under packages/ and
           # listing it there; nothing in this step is per-package.
           source ./repo.conf
+          # The build needs exactly makedepends and depends. optdepends are left
+          # out on purpose: they name runtime alternatives (pulseaudio against
+          # pipewire-pulse) that would all be installed at once, and the ones
+          # this repository publishes do not exist in the Arch repositories.
           install_deps=()
           for pkg in "${PUBLISHED_PACKAGES[@]}"; do
             [[ -f packages/$pkg/PKGBUILD ]] || { echo "::error::$pkg has no PKGBUILD"; exit 1; }
+            # A previous PKGBUILD's arrays survive the next source when this one
+            # does not set them, so they are cleared first: live2d-sdk-nonfree
+            # declares no makedepends, and without the unset it would inherit
+            # bongocat-x-bin's.
+            unset makedepends depends
             # The leading ./ matters: without a slash the dot builtin looks the
-            # name up in PATH when the shell runs in POSIX mode.
-            ( source ./packages/$pkg/PKGBUILD
-              install_deps+=("${makedepends[@]}" "${depends[@]}" "${optdepends[@]}") )
+            # name up in PATH when the shell runs in POSIX mode. No subshell
+            # either: install_deps has to survive the source, otherwise the array
+            # stays empty and pacman installs nothing but the literals below.
+            # shellcheck disable=SC1091
+            source ./packages/$pkg/PKGBUILD
+            install_deps+=("${makedepends[@]}" "${depends[@]}")
           done
+          # sort -u keeps a dependency named by several packages from being
+          # passed twice, which --needed tolerates but makes the log unreadable.
           pacman -S --noconfirm --needed --disable-download-timeout \
-            "${install_deps[@]}" gnupg curl jq zstd namcap
+            "$(printf '%s\n' "${install_deps[@]}" | sort -u | tr '\n' ' ')" \
+            gnupg curl jq zstd namcap
 
       # live2d-sdk-nonfree unpacks the Cubism SDK, bongocat-x-bin reuses an
       # upstream release archive. Reusing them keeps every build from
