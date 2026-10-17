@@ -340,10 +340,10 @@ jobs:
           id -u builder >/dev/null 2>&1 || useradd -m -s /bin/bash builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
           if [[ $BUILD == true ]]; then
-            args=()
-            args+=(--version "${VERSION:-$(sed -n 's/^pkgver=//p' packages/$PRIMARY_PACKAGE/PKGBUILD)}")
+            # set-pkgver.sh takes positional arguments: <package> <version>.
+            args=("$PRIMARY_PACKAGE" "${VERSION:-$(sed -n 's/^pkgver=//p' packages/$PRIMARY_PACKAGE/PKGBUILD)}")
             [[ $BUMP == true ]] && args+=(--bump-pkgrel)
-            su builder -c "cd '$GITHUB_WORKSPACE' && scripts/set-pkgver.sh $PRIMARY_PACKAGE ${args[*]}"
+            su builder -c "cd '$GITHUB_WORKSPACE' && scripts/set-pkgver.sh ${args[*]}"
             for pkg in "${PUBLISHED_PACKAGES[@]}"; do
               [[ $pkg == $PRIMARY_PACKAGE ]] && continue
               pkgver=$(sed -n 's/^pkgver=//p' "packages/$pkg/PKGBUILD")
@@ -361,9 +361,8 @@ jobs:
             echo 'the PKGBUILDs already record these versions'
             exit 0
           fi
-          # The message must not touch ${args[2]}: when bump is false the array
-          # holds only --version and its value, and set -u aborts the step there,
-          # taking the SDK's freshly bumped pkgrel down with it.
+          # The message is read from the PKGBUILD rather than from ${args}, so
+          # it stays correct whether or not this run bumped the primary package.
           primary_ver=$(sed -n 's/^pkgver=//p' "packages/$PRIMARY_PACKAGE/PKGBUILD")
           primary_rel=$(sed -n 's/^pkgrel=//p' "packages/$PRIMARY_PACKAGE/PKGBUILD")
           git commit -m "chore: package $PRIMARY_PACKAGE $primary_ver-$primary_rel [skip ci]"
