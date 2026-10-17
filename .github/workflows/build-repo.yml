@@ -335,23 +335,24 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           source ./repo.conf
 
+          # Primary package tracks upstream; SDK rebuilt with --bump-pkgrel.
+          # Persisting both prevents detect from seeing a permanent mismatch.
+          id -u builder >/dev/null 2>&1 || useradd -m -s /bin/bash builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
           if [[ $BUILD == true ]]; then
-            # Only the package that tracks upstream releases moves with the
-            # detected version; the SDK package was bumped by the build itself.
-            args=("$PRIMARY_PACKAGE" "$VERSION")
+            args=()
+            args+=(--version "${VERSION:-$(sed -n 's/^pkgver=//p' packages/$PRIMARY_PACKAGE/PKGBUILD)}")
             [[ $BUMP == true ]] && args+=(--bump-pkgrel)
+            su builder -c "cd '$GITHUB_WORKSPACE' && scripts/set-pkgver.sh $PRIMARY_PACKAGE ${args[*]}"
+            for pkg in "${PUBLISHED_PACKAGES[@]}"; do
+              [[ $pkg == $PRIMARY_PACKAGE ]] && continue
+              pkgver=$(sed -n 's/^pkgver=//p' "packages/$pkg/PKGBUILD")
+              su builder -c "cd '$GITHUB_WORKSPACE' && scripts/set-pkgver.sh $pkg $pkgver --bump-pkgrel"
+            done
           else
-            # Nothing was rebuilt, so the recorded version is already correct.
             echo 'no build ran; the recorded versions are unchanged'
             exit 0
           fi
-
-          # makepkg regenerates .SRCINFO and refuses to run as root, so the bump
-          # itself is applied as an unprivileged user while the commit that
-          # follows still runs here.
-          id -u builder >/dev/null 2>&1 || useradd -m -s /bin/bash builder
-          chown -R builder:builder "$GITHUB_WORKSPACE"
-          su builder -c "cd '$GITHUB_WORKSPACE' && scripts/set-pkgver.sh ${args[*]}"
 
           # Every package directory is added, because the build bumped the SDK
           # package's pkgrel too, whether or not this step moved it.

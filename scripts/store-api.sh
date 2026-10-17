@@ -48,13 +48,44 @@ store_assets() {
     | jq -r '.[] | [.id, .name] | @tsv'
 }
 
-# store_packages: "id<TAB>name<TAB>pkgver-pkgrel" for package archives.
+# store_packages: "id<TAB>name<TAB>pkgver-pkgrel<TAB>pkgname" for package
+# archives. The package name is what store_prune groups its retention window
+# by, and every published name contains dashes ("bongocat-x-bin",
+# "live2d-sdk-nonfree"), so it is matched against the names this repository
+# actually publishes rather than split on a dash.
 store_packages() {
-  local id name version
+  local id name version pkgname
   while IFS=$'\t' read -r id name; do
     version=$(store_package_version "$name") || continue
-    printf '%s\t%s\t%s\n' "$id" "$name" "$version"
+    pkgname=$(store_package_name "$name") || continue
+    printf '%s\t%s\t%s\t%s\n' "$id" "$name" "$version" "$pkgname"
   done < <(store_assets | grep -E '\.pkg\.tar\.(gz|zst)$' || true)
+}
+
+# store_package_name <filename>: the published package name the archive belongs
+# to, matched longest-first so "bongocat-x-bin" is not confused with a prefix of
+# another name. Returns nothing when the name is not one this repository
+# publishes, which is how foreign assets are ignored.
+store_package_name() {
+  local name=$1 pkgbase candidate
+  # repo.conf is sourced by the scripts that reach this point, but relying on
+  # that ordering is how a caller silently stops pruning correctly, so load it
+  # here when the names are not already known.
+  if [[ -z ${PUBLISHED_PACKAGES[*]:-} && -f $REPO_ROOT/repo.conf ]]; then
+    # shellcheck disable=SC1091
+    source "$REPO_ROOT/repo.conf"
+  fi
+  [[ -n ${PUBLISHED_PACKAGES[*]:-} ]] || return 1
+  for candidate in "${PUBLISHED_PACKAGES[@]}"; do
+    if [[ $name == "$candidate"-* ]]; then
+      # Prefer the longest match: a name can be a prefix of another.
+      if [[ -z ${pkgbase:-} || ${#candidate} -gt ${#pkgbase} ]]; then
+        pkgbase=$candidate
+      fi
+    fi
+  done
+  [[ -n ${pkgbase:-} ]] || return 1
+  printf '%s\n' "$pkgbase"
 }
 
 # store_package_version <filename>: "bongocat-x-bin-2.2.0-1-x86_64.pkg.tar.zst"
@@ -70,12 +101,30 @@ store_package_version() {
   printf '%s\n' "$version"
 }
 
-# store_package_names: the package names the store holds, one per line.
+# store_package_names: the published package names the store holds, one per
+# line, without duplicates (a package with several versions is still one name).
 store_package_names() {
-  local _ name _version
-  while IFS=$'\t' read -r _ name _version; do
-    printf '%s\n' "$name"
+  local _ _version pkgname
+  while IFS=$'\t' read -r _ _name _version pkgname; do
+    printf '%s\n' "$pkgname"
+  done < <(store_packages) | sort -u
+}
+
+# store_served_pkgrel <pkgname> <pkgver>: the pkgrel the store is currently
+# serving for that exact pkgver, or nothing when it serves no such version.
+# detect-upstream.sh uses this to notice a package whose PKGBUILD changed (a
+# packaging fix, or a new pinned source revision) without its version moving,
+# which a version-only comparison cannot see.
+store_served_pkgrel() {
+  local want_name=$1 want_ver=$2 id name version pkgname rel
+  while IFS=$'\t' read -r id name version pkgname; do
+    [[ $pkgname == "$want_name" ]] || continue
+    rel=${version##*-}
+    [[ $version == "$want_ver-$rel" ]] || continue
+    printf '%s\n' "$rel"
+    return 0
   done < <(store_packages)
+  return 1
 }
 
 store_asset_id() { # store_asset_id <name>
@@ -138,27 +187,37 @@ store_fetch() {
 }
 
 # store_prune <keep> <directory>: drops everything but the newest <keep>
-# packages from the release store and from <directory>.
+# versions of each package from the release store and from <directory>.
+#
+# The window is per package name, not global: the repository holds packages
+# with unrelated version series (the app tracks upstream 2.2.0, the SDK is
+# pinned to its own 5.0.5), and keeping the newest <keep> entries across all of
+# them let an older pkgrel of one package push the other package out entirely.
 store_prune() {
-  local keep=$1 dest=$2 newest=()
-  local id name version sig_id
+  local keep=$1 dest=$2
+  local id name version sig_id pkgname index
+  local -A all=()
 
-  while IFS=$'\t' read -r id name version; do
-    newest+=("$version"$'\t'"$id"$'\t'"$name")
+  # "id<TAB>name<TAB>version<TAB>pkgname" per package, grouped by package name
+  # in the order they were read; store_assets comes oldest first.
+  while IFS=$'\t' read -r id name version pkgname; do
+    all[$pkgname]+="${id}"$'\t'"${name}"$'\t'"${version}"$'\n'
   done < <(store_packages)
 
-  (( ${#newest[@]} > keep )) || return 0
-
-  local index=0
-  while IFS=$'\t' read -r version id name; do
-    (( index++ )) || true
-    (( index <= keep )) && continue
-    log "pruning $name (keeping the newest $keep packages)"
-    store_delete_asset "$id"
-    rm -f "$dest/$name" "$dest/$name.sig"
-    # The detached signature is a separate asset and would linger otherwise.
-    if sig_id=$(store_asset_id "$name.sig"); then
-      store_delete_asset "$sig_id"
-    fi
-  done < <(printf '%s\n' "${newest[@]}" | sort -t$'\t' -k1,1V -r)
+  for pkgname in "${!all[@]}"; do
+    index=0
+    # Newest version first: store_assets comes in upload order, which is oldest
+    # first, so the version column decides what is retained.
+    while IFS=$'\t' read -r id name version; do
+      (( index++ )) || true
+      (( index <= keep )) && continue
+      log "pruning $name (keeping the newest $keep versions of $pkgname)"
+      store_delete_asset "$id"
+      rm -f "$dest/$name" "$dest/$name.sig"
+      # The detached signature is a separate asset and would linger otherwise.
+      if sig_id=$(store_asset_id "$name.sig"); then
+        store_delete_asset "$sig_id"
+      fi
+    done < <(printf '%s' "${all[$pkgname]}" | sort -t$'\t' -k3,3V -r)
+  done
 }

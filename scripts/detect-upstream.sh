@@ -117,6 +117,36 @@ if $force; then
   reason="forced rebuild of $tag"
 fi
 
+# The SDK package does not track upstream releases, so a change to its own
+# source (a new pinned Cubism revision) or to its PKGBUILD (a packaging fix,
+# such as taking the Linux Core instead of the HarmonyOS one) is invisible to
+# the version comparison above. Compare its recorded pkgrel against the PKGBUILD
+# to notice that the packaged files no longer match what is being served.
+if ! $build && [[ -n $STORE_REPO ]]; then
+  for name in "${PUBLISHED_PACKAGES[@]}"; do
+    [[ $name == "$package" ]] && continue
+    local_pkgdir=''
+    for dir in $(package_dirs); do
+      [[ $(package_name "$dir") == "$name" ]] && local_pkgdir=$dir && break
+    done
+    [[ -n $local_pkgdir ]] || continue
+    local_rel=$(pkgbuild_field pkgrel "$local_pkgdir/PKGBUILD")
+    local_ver=$(pkgbuild_field pkgver "$local_pkgdir/PKGBUILD")
+    served=$(store_served_pkgrel "$name" "$local_ver" 2>/dev/null || true)
+    # bump deliberately stays false: the build step already moves a
+    # non-primary package's pkgrel on every build, and bumping the primary
+    # package here would advance the app's version for a change that did not
+    # touch it.
+    if [[ -z $served ]]; then
+      build=true
+      reason="$name $local_ver is published but the store holds no such version; rebuilding"
+    elif [[ $served != "$local_rel" ]]; then
+      build=true
+      reason="$name is served as $local_ver-$served while the PKGBUILD records $local_ver-$local_rel; rebuilding"
+    fi
+  done
+fi
+
 # The site is refreshed whenever it serves a different package set than the store
 # holds. That way an interrupted deployment heals on the next scheduled run
 # instead of leaving the repository stale until someone notices.

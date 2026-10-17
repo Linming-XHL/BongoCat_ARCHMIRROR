@@ -42,7 +42,7 @@ fi
 if [[ -w ${GITHUB_STEP_SUMMARY:-} ]]; then
   {
     printf '### Release store\n\n'
-    while IFS=$'\t' read -r _ name version; do
+    while IFS=$'\t' read -r _ name version _pkgname; do
       printf -- '- `%s` (%s)\n' "$name" "$version"
     done < <(store_packages)
   } >>"$GITHUB_STEP_SUMMARY"
