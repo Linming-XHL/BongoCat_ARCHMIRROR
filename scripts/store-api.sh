@@ -54,7 +54,7 @@ store_packages() {
   while IFS=$'\t' read -r id name; do
     version=$(store_package_version "$name") || continue
     printf '%s\t%s\t%s\n' "$id" "$name" "$version"
-  done < <(store_assets | grep -E '\.pkg\.tar\.' || true)
+  done < <(store_assets | grep -E '\.pkg\.tar\.(gz|zst)$' || true)
 }
 
 # store_package_version <filename>: "bongocat-x-bin-2.2.0-1-x86_64.pkg.tar.zst"
