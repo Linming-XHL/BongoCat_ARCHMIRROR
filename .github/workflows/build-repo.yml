@@ -366,6 +366,11 @@ jobs:
           primary_ver=$(sed -n 's/^pkgver=//p' "packages/$PRIMARY_PACKAGE/PKGBUILD")
           primary_rel=$(sed -n 's/^pkgrel=//p' "packages/$PRIMARY_PACKAGE/PKGBUILD")
           git commit -m "chore: package $PRIMARY_PACKAGE $primary_ver-$primary_rel [skip ci]"
+          # Two runs can finish close together (a schedule and a dispatched one
+          # in the same window), and the second push would be rejected as
+          # non-fast-forward. Rebase onto whatever landed in between instead of
+          # failing the deployment after the packages were already published.
+          git pull --rebase --autostash origin "${{ github.ref_name }}"
           git push origin "HEAD:${{ github.ref_name }}"
 
       - name: Summarise the deployment

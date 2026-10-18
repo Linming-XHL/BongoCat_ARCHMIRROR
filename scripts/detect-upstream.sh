@@ -117,14 +117,15 @@ if $force; then
   reason="forced rebuild of $tag"
 fi
 
-# The SDK package does not track upstream releases, so a change to its own
-# source (a new pinned Cubism revision) or to its PKGBUILD (a packaging fix,
-# such as taking the Linux Core instead of the HarmonyOS one) is invisible to
-# the version comparison above. Compare its recorded pkgrel against the PKGBUILD
-# to notice that the packaged files no longer match what is being served.
+# Every published package has to actually be in the store: the version
+# comparison above only proves what the git tree says, and an asset can go
+# missing (a prune that picked the wrong side, an upload that was rejected).
+# The SDK also does not track upstream releases, so a change to its own source
+# (a new pinned Cubism revision) or to its PKGBUILD (a packaging fix, such as
+# taking the Linux Core instead of the HarmonyOS one) is invisible to that
+# comparison and is caught here by its pkgrel alone.
 if ! $build && [[ -n $STORE_REPO ]]; then
   for name in "${PUBLISHED_PACKAGES[@]}"; do
-    [[ $name == "$package" ]] && continue
     local_pkgdir=''
     for dir in $(package_dirs); do
       [[ $(package_name "$dir") == "$name" ]] && local_pkgdir=$dir && break
@@ -140,7 +141,11 @@ if ! $build && [[ -n $STORE_REPO ]]; then
     if [[ -z $served ]]; then
       build=true
       reason="$name $local_ver is published but the store holds no such version; rebuilding"
-    elif [[ $served != "$local_rel" ]]; then
+    elif [[ $served != "$local_rel" && $name != "$package" ]]; then
+      # The primary package may legitimately be recorded ahead of what is
+      # served when a build bumped it and the store still holds the previous
+      # pkgrel; only a package that does not track upstream is repackaged for
+      # its pkgrel alone.
       build=true
       reason="$name is served as $local_ver-$served while the PKGBUILD records $local_ver-$local_rel; rebuilding"
     fi

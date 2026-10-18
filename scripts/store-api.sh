@@ -116,15 +116,21 @@ store_package_names() {
 # packaging fix, or a new pinned source revision) without its version moving,
 # which a version-only comparison cannot see.
 store_served_pkgrel() {
-  local want_name=$1 want_ver=$2 id name version pkgname rel
+  local want_name=$1 want_ver=$2 id name version pkgname rel newest=''
   while IFS=$'\t' read -r id name version pkgname; do
     [[ $pkgname == "$want_name" ]] || continue
     rel=${version##*-}
     [[ $version == "$want_ver-$rel" ]] || continue
-    printf '%s\n' "$rel"
-    return 0
+    # The store can hold several pkgrels of the same version (the build bumps
+    # one every run), and store_packages lists assets in upload order, so the
+    # first match is the oldest. Answer with the largest, or detect never sees
+    # the current one and rebuilds forever.
+    if [[ -z $newest ]] || (( rel > newest )); then
+      newest=$rel
+    fi
   done < <(store_packages)
-  return 1
+  [[ -n $newest ]] || return 1
+  printf '%s\n' "$newest"
 }
 
 store_asset_id() { # store_asset_id <name>
@@ -207,7 +213,9 @@ store_prune() {
   for pkgname in "${!all[@]}"; do
     index=0
     # Newest version first: store_assets comes in upload order, which is oldest
-    # first, so the version column decides what is retained.
+    # first, so the version column decides what is retained. The reverse has to
+    # ride on the key suffix (-k3,3Vr): with -k3,3V plus a separate -r, GNU sort
+    # still ordered these ascending and pruned the version just uploaded.
     while IFS=$'\t' read -r id name version; do
       (( index++ )) || true
       (( index <= keep )) && continue
@@ -218,6 +226,6 @@ store_prune() {
       if sig_id=$(store_asset_id "$name.sig"); then
         store_delete_asset "$sig_id"
       fi
-    done < <(printf '%s' "${all[$pkgname]}" | sort -t$'\t' -k3,3V -r)
+    done < <(printf '%s' "${all[$pkgname]}" | sort -t$'\t' -k3,3Vr)
   done
 }
