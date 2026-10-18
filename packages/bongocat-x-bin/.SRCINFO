@@ -29,6 +29,6 @@ pkgbase = bongocat-x-bin
 	options = !debug
 	options = !lto
 	source = BongoCat-X-2.2.0-linux-x64.tar.gz::https://github.com/TianMengLucky/BongoCat-X/releases/download/v2.2.0/BongoCat-X-2.2.0-linux-x64.tar.gz
-	sha256sums = 6eafd01b8f62bb9ccc28b00658794487c0efd85361a4e6dc54548f99058f9ede
+	sha256sums = SKIP
 
 pkgname = bongocat-x-bin

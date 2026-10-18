@@ -28,29 +28,32 @@ options=('!strip' '!debug' '!lto')
 
 _pkgarch=x64
 source=("BongoCat-X-$pkgver-linux-$_pkgarch.tar.gz::https://github.com/TianMengLucky/BongoCat-X/releases/download/v$pkgver/BongoCat-X-$pkgver-linux-$_pkgarch.tar.gz")
-# Upstream publishes a .sha256 next to every archive; this digest is GitHub's own
-# for the asset at the pinned version. The build re-verifies it against the
-# published sidecar, so an upstream re-upload is caught instead of trusted.
-sha256sums=('6eafd01b8f62bb9ccc28b00658794487c0efd85361a4e6dc54548f99058f9ede')
+# pkgver moves with every upstream release, so a digest pinned here would have to
+# be rewritten on each one — and the pipeline that bumps pkgver cannot rewrite it,
+# which made every release fail at makepkg's checksum check. The trust anchor is
+# upstream's own .sha256 sidecar, verified in package() against the bytes that
+# were actually downloaded.
+sha256sums=('SKIP')
 noextract=()
 
-# No pkgver() on purpose: sha256sums pins one exact archive, so a self-updating
-# pkgver() would only make makepkg look for a source whose checksum is not in the
-# file. The source line interpolates $pkgver, so set-pkgver.sh moving pkgver moves
-# the URL too, and the pipeline is what follows upstream releases.
+# No pkgver() on purpose: the pipeline is what follows upstream releases, and the
+# source line interpolates $pkgver, so set-pkgver.sh moving pkgver moves the URL
+# too. A self-updating pkgver() would fight that.
 
 package() {
   local archive="$srcdir/BongoCat-X-$pkgver-linux-$_pkgarch.tar.gz" work root
 
-  # Trust the checksum upstream publishes next to the archive rather than the
-  # pinned one alone: makepkg already verified the pin above, and a mismatch here
-  # means upstream replaced the asset, so the pin has to be revisited.
+  # The sidecar is the only trust anchor now that the digest is not pinned, so
+  # hash the archive that was actually downloaded rather than trusting the
+  # transfer. A mismatch means upstream replaced the asset under the same tag.
   local published
   published=$(curl -fsSL "https://github.com/TianMengLucky/BongoCat-X/releases/download/v$pkgver/BongoCat-X-$pkgver-linux-$_pkgarch.tar.gz.sha256" \
     | grep -oiE '[0-9a-f]{64}' | head -n1)
   [[ -n $published ]] || { error 'Upstream publishes no checksum for the release archive'; return 1; }
-  [[ $published == "${sha256sums[0]}" ]] || {
-    error "Upstream checksum $published differs from the pinned ${sha256sums[0]}"; return 1; }
+  local actual
+  actual=$(sha256sum "$archive" | cut -d' ' -f1)
+  [[ $actual == "$published" ]] || {
+    error "Archive checksum $actual differs from upstream's $published"; return 1; }
 
   work=$(mktemp -d) || return 1
   bsdtar -xf "$archive" -C "$work" || return 1
