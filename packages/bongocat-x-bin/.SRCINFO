@@ -1,7 +1,7 @@
 pkgbase = bongocat-x-bin
 	pkgdesc = Desktop pet that reacts to your keyboard and mouse input (Live2D on SDL3, upstream binary)
 	pkgver = 2.2.2
-	pkgrel = 1
+	pkgrel = 2
 	url = https://github.com/TianMengLucky/BongoCat-X
 	arch = x86_64
 	license = AGPL-3.0-only
