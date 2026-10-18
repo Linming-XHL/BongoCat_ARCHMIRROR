@@ -173,8 +173,12 @@ target_repo=${STORE_TARGET_REPO:-$GITHUB_REPOSITORY}
 [[ -n $target_repo ]] || die 'no target repository for the mirrors (set STORE_TARGET_REPO or run with GITHUB_REPOSITORY/STORE_REPO)'
 store_tag=${STORE_TAG:-arch-repo-store}
 mirror_servers=''
+# A proxy serves the release assets, which sit flat at the tag: there is no
+# $arch directory there, so appending it (as the site line does) makes every
+# proxied request a 404 and pacman silently falls back to the site. The site
+# mirrors the repository layout and therefore does need $arch.
 for proxy in ${MIRROR_PROXIES[@]+"${MIRROR_PROXIES[@]}"}; do
-  mirror_servers+="Server = ${proxy%/}/https://github.com/$target_repo/releases/download/$store_tag/\$arch"$'\n'
+  mirror_servers+="Server = ${proxy%/}/https://github.com/$target_repo/releases/download/$store_tag"$'\n'
 done
 mirror_servers+="Server = $site_url/\$arch"
 
@@ -232,8 +236,14 @@ jq '.' <<<"$packages_json" >"$out_dir/packages.json"
 # makes the store self-sufficient for the mirror Server lines.
 if [[ -n $STORE_REPO && -z $from_dir ]]; then
   log 'uploading the database and key to the release store for the mirrors'
+  # pacman asks for <repo>.db and does not fall back to <repo>.db.tar.gz when
+  # that 404s: it reports "failed to retrieve <repo>.db" and gives up on the
+  # mirror, so the aliases have to be in the store too, not just the canonical
+  # names.
   "$REPO_ROOT/scripts/publish-store.sh" \
     --store-repo "$STORE_REPO" --store-tag "${STORE_TAG:-arch-repo-store}" --dir "$out_dir" \
+    "$out_dir/x86_64/$repo_name.db" \
+    "$out_dir/x86_64/$repo_name.db.sig" \
     "$out_dir/x86_64/$repo_name.db.tar.gz" \
     "$out_dir/x86_64/$repo_name.db.tar.gz.sig" \
     "$out_dir/$repo_name-repo.asc" \
