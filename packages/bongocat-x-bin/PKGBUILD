@@ -7,8 +7,8 @@
 # live2d-sdk-nonfree to enable Live2D.
 
 pkgname=bongocat-x-bin
-pkgver=2.2.0
-pkgrel=4
+pkgver=2.2.2
+pkgrel=1
 pkgdesc='Desktop pet that reacts to your keyboard and mouse input (Live2D on SDL3, upstream binary)'
 arch=('x86_64')
 url='https://github.com/TianMengLucky/BongoCat-X'
