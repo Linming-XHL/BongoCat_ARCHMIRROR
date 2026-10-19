@@ -7,7 +7,7 @@
 
 pkgname=live2d-sdk-nonfree
 pkgver=5.0.5
-pkgrel=7
+pkgrel=8
 pkgdesc='Live2D Cubism Core runtime library for BongoCat-X (proprietary, non-free)'
 arch=('x86_64')
 url='https://www.live2d.com/en/sdk/download/native/'
